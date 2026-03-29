@@ -70,18 +70,27 @@
    - `arXiv` / 其它：
      - 后续可以按需扩展。
 
-   所有数据源最终汇总为统一的「候选文章 JSON 格式」，形如：
+   所有数据源最终汇总为统一的「候选文章 JSON 格式」，与具体源解耦，形如：
 
-   ```json
+   ```jsonc
    {
-     "id": "hn-123456",
+     "id": "hn-123456",                 // 源内唯一 ID（hn-123456 / arxiv-xyz / rss-abc）
      "url": "https://example.com/post",
      "title": "Efficient vector search with SQLite",
      "summary": "短摘要或抓取到的正文片段",
      "tags": "hn,sqlite,vector,search",
-     "source": "hackernews",
-     "points": 350,
-     "created_at": "2026-03-28T07:00:00Z"
+     "source": "hackernews",            // hackernews | arxiv | rss | ...
+     "published_at": "2026-03-28T07:00:00Z",
+
+     // 各数据源自行归一化后的“热度/重要性”得分，统一映射到 0..1
+     "popularity_score": 0.82,
+
+     // 源特定的原始字段，仅供源专属通道使用；主打分逻辑不会依赖这些字段
+     "source_meta": {
+       "hn_points": 350,
+       "hn_comments": 80,
+       "rss_feed": "https://example.com/feed.xml"
+     }
    }
    ```
 
@@ -102,17 +111,35 @@
      ```bash
      clawfeedradar run \
        --root /path/to/knowledge_data \
+       --sources hn,arxiv,rss \
        --score-threshold 0.9 \
-       --output ./feeds/hn_radar.xml
+       --output ./feeds/radar.xml
      ```
 
      内部步骤：
 
-     1. 从各个源（HN / RSS / arXiv）拉候选文章；
-     2. 对每条候选，调用 `clawsqlite knowledge score-candidates` 获取兴趣分；
-     3. 过滤掉兴趣分不足的文章，只保留“高度落在兴趣簇里”的部分；
-     4. 用小型 LLM（或你配置的翻译服务）生成中英摘要；
-     5. 把这些条目渲染成一个 RSS feed (`*.xml`) 文件。
+     1. 从各个源（HN / RSS / arXiv）拉候选文章，统一转成上面的 Candidate 结构；
+     2. 对每条候选，调用 `clawsqlite knowledge score-candidates` 获取 **通用兴趣分**（interest_score），该分数只依赖：
+        - 文章向量与兴趣簇的相似度（最近簇 / 次近簇等）；
+        - 簇内文章的 usage（view_count / last_viewed_at）；
+        - 文章发布时间（recency）；
+        - `popularity_score`（已归一化的通用热度）。
+     3. 针对少数头部源（例如 `hackernews`、`arxiv`），通过可选的 **源特化通道** 做一点增量打分：
+
+        ```python
+        base = interest_score  # 通用主通道
+        extra = SOURCE_SCORERS.get(candidate.source, score_generic_extra)(candidate, base)
+        final_score = base + LAMBDA_SOURCE.get(candidate.source, LAMBDA_SOURCE["default"]) * extra
+        ```
+
+        - `score_hn_extra` 等函数只看 `candidate.source_meta` / `popularity_score` 这类源特定字段；
+        - 主通道逻辑不依赖任何 HN/arXiv 特有字段，保持对所有源通用。
+
+     4. 在排序时加入 **多样性与探索** 策略：
+        - 主列表按 `final_score` 排序，但每个兴趣簇/主题最多取若干条，避免被单一簇垄断；
+        - 额外从“处于簇边界”或“全局高热度但相似度一般”的候选中抽取 1–2 条作为探索项，保证视野不过度收窄。
+
+     5. 对选中的条目，用小型 LLM（或你配置的翻译服务）生成中英摘要，并渲染成一个 RSS feed (`*.xml`) 文件。
 
 3. **输出：生成专属 RSS feed**
 

@@ -15,7 +15,7 @@ from xml.sax.saxutils import escape
 
 from .config import load_config
 from .embed_client import embed_text
-from .llm_client import load_small_llm_config, generate_bilingual_summary
+from .llm_client import load_small_llm_config, generate_preview_summary, generate_bilingual_body
 from .models import Candidate
 from .scoring import ScoreParams, score_candidates
 from .scrape import fetch_fulltext
@@ -48,6 +48,8 @@ def run_radar(
     score_threshold: float,
     max_items: int,
     json_stdout: bool,
+    source_lang: str | None,
+    target_lang: str | None,
 ) -> int:
     # 确保 root 传递给 config
     if root:
@@ -84,25 +86,29 @@ def run_radar(
     if max_items > 0:
         selected = selected[: max_items]
 
-    # 5) optional: fetch fulltext + bilingual summaries (serial, best-effort)
-    llm_cfg = load_small_llm_config_from_env()
+    # 5) optional: fetch fulltext + LLM summaries (serial, best-effort)
+    llm_cfg = load_small_llm_config(source_lang_override=source_lang, target_lang_override=target_lang)
     enriched: List[dict] = []
     for item in selected:
         c = item.candidate
         fulltext = fetch_fulltext(c.url) or ""
-        summary_llm = ""
+        summary_preview = ""
+        body_bilingual = ""
         if fulltext and llm_cfg is not None:
             try:
-                summary_llm = generate_bilingual_summary(fulltext, llm_cfg)
+                summary_preview = generate_preview_summary(fulltext, llm_cfg)
+                body_bilingual = generate_bilingual_body(fulltext, llm_cfg)
             except Exception:
-                summary_llm = ""
+                summary_preview = ""
+                body_bilingual = ""
 
         enriched.append(
             {
                 "candidate": c,
                 "item": item,
                 "fulltext": fulltext,
-                "summary_llm": summary_llm,
+                "summary_preview": summary_preview,
+                "body_bilingual": body_bilingual,
             }
         )
 
@@ -130,7 +136,8 @@ def run_radar(
                 "sim_best": item.match.sim_best,
                 "sim_second": item.match.sim_second,
                 "fulltext": row["fulltext"],
-                "summary_bilingual": row["summary_llm"],
+                "summary_preview": row["summary_preview"],
+                "body_bilingual": row["body_bilingual"],
             }
         )
 
@@ -145,11 +152,14 @@ def run_radar(
     now = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S %z")
 
     items_xml: List[str] = []
-    for item in selected:
-        c = item.candidate
+    for row in enriched:
+        c = row["candidate"]
+        item = row["item"]
         title = escape(c.title or "")
         link = escape(c.url or "")
-        desc = escape(c.summary or "")
+        # Prefer LLM preview summary if available; fall back to original summary
+        desc_raw = row["summary_preview"] or c.summary or ""
+        desc = escape(desc_raw)
         pub_date = c.published_at.strftime("%a, %d %b %Y %H:%M:%S %z")
         items_xml.append(
             f"<item>"

@@ -24,10 +24,13 @@ class SmallLLMConfig:
     max_input_chars: int
     max_output_chars: int
     sleep_between_ms: int
-    target_langs: List[str]
+    source_lang: str  # e.g. "auto", "en"
+    target_lang: str  # e.g. "zh"
 
 
-def load_small_llm_config_from_env() -> Optional[SmallLLMConfig]:
+def load_small_llm_config(
+    *, source_lang_override: Optional[str] = None, target_lang_override: Optional[str] = None
+) -> Optional[SmallLLMConfig]:
     base_url = os.environ.get("SMALL_LLM_BASE_URL")
     model = os.environ.get("SMALL_LLM_MODEL")
     api_key = os.environ.get("SMALL_LLM_API_KEY")
@@ -48,10 +51,19 @@ def load_small_llm_config_from_env() -> Optional[SmallLLMConfig]:
     max_out = _int_env("CLAWFEEDRADAR_LLM_MAX_OUTPUT_CHARS", 6000)
     sleep_ms = _int_env("CLAWFEEDRADAR_LLM_SLEEP_BETWEEN_MS", 500)
 
-    langs_raw = os.environ.get("CLAWFEEDRADAR_LLM_TARGET_LANGS", "en,zh")
-    target_langs = [x.strip() for x in langs_raw.split(",") if x.strip()]
-    if not target_langs:
-        target_langs = ["en", "zh"]
+    # Language hints: env defaults, CLI overrides
+    src_env = os.environ.get("CLAWFEEDRADAR_LLM_SOURCE_LANG", "auto").strip() or "auto"
+    tgt_env = os.environ.get("CLAWFEEDRADAR_LLM_TARGET_LANG", "").strip()
+
+    if source_lang_override and source_lang_override.strip():
+        src_lang = source_lang_override.strip()
+    else:
+        src_lang = src_env
+
+    if target_lang_override and target_lang_override.strip():
+        tgt_lang = target_lang_override.strip()
+    else:
+        tgt_lang = tgt_env or "en"
 
     return SmallLLMConfig(
         base_url=base_url,
@@ -60,7 +72,8 @@ def load_small_llm_config_from_env() -> Optional[SmallLLMConfig]:
         max_input_chars=max_in,
         max_output_chars=max_out,
         sleep_between_ms=sleep_ms,
-        target_langs=target_langs,
+        source_lang=src_lang,
+        target_lang=tgt_lang,
     )
 
 
@@ -75,51 +88,8 @@ def _chat_url(base_url: str) -> str:
     return base + "/v1/chat/completions" if base.startswith("http") else base + "/chat/completions"
 
 
-def generate_bilingual_summary(fulltext: str, cfg: SmallLLMConfig) -> str:
-    """Call the small LLM to produce a bilingual (EN/ZH) summary.
-
-    v0: return a single markdown-ish block, e.g.:
-
-        [EN]
-        ...
-
-        [ZH]
-        ...
-
-    The caller can embed this directly into RSS description or JSON.
-    """
-
-    if not fulltext:
-        return ""
-
-    text = fulltext[: cfg.max_input_chars]
-
+def _post_chat(payload: dict, cfg: SmallLLMConfig) -> str:
     url = _chat_url(cfg.base_url)
-
-    langs = ",".join(cfg.target_langs)
-    sys_prompt = (
-        "You are a concise bilingual summarization assistant. "
-        "Given an article, produce a short summary in the requested languages. "
-        "Write clear markdown with headings for each language. "
-        f"Target languages (in order): {langs}."
-    )
-
-    user_prompt = (
-        "Summarize the following article in the target languages. "
-        "Focus on key ideas, not minor details. "
-        "Use at most a few short paragraphs per language.\n\n" + text
-    )
-
-    payload = {
-        "model": cfg.model,
-        "messages": [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        # Let the server enforce output length; we just pass a soft hint.
-        "max_tokens": cfg.max_output_chars // 3 if cfg.max_output_chars > 0 else None,
-    }
-
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {cfg.api_key}",
@@ -128,7 +98,6 @@ def generate_bilingual_summary(fulltext: str, cfg: SmallLLMConfig) -> str:
             "Mozilla/5.0 (X11; Linux x86_64) Clawfeedradar/0.1",
         ),
     }
-
     try:
         resp = httpx.post(url, json=payload, headers=headers, timeout=120)
     except Exception as e:
@@ -154,3 +123,81 @@ def generate_bilingual_summary(fulltext: str, cfg: SmallLLMConfig) -> str:
         time.sleep(cfg.sleep_between_ms / 1000.0)
 
     return content
+
+
+def generate_preview_summary(fulltext: str, cfg: SmallLLMConfig) -> str:
+    """Generate a *single-language* preview summary in cfg.target_lang.
+
+    Intended for RSS <description> and quick scanning.
+    """
+
+    if not fulltext:
+        return ""
+
+    text = fulltext[: cfg.max_input_chars]
+
+    src = cfg.source_lang or "auto"
+    tgt = cfg.target_lang
+
+    sys_prompt = (
+        "You are a concise summarization assistant. "
+        "Given an article, produce a short summary ONLY in the target language. "
+        "Do not include any other language. "
+        f"Source language hint: {src}. Target language: {tgt}."
+    )
+
+    user_prompt = (
+        "Summarize the following article. "
+        "Write ONLY in the target language, in at most a few short paragraphs.\n\n" + text
+    )
+
+    payload = {
+        "model": cfg.model,
+        "messages": [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "max_tokens": cfg.max_output_chars // 3 if cfg.max_output_chars > 0 else None,
+    }
+
+    return _post_chat(payload, cfg)
+
+
+def generate_bilingual_body(fulltext: str, cfg: SmallLLMConfig) -> str:
+    """Generate paragraph-level bilingual body.
+
+    For each paragraph of the original article, output:
+    - first the original paragraph
+    - then its translation into cfg.target_lang
+
+    The result is a markdown body suitable for detailed reading.
+    """
+
+    if not fulltext:
+        return ""
+
+    text = fulltext[: cfg.max_input_chars]
+    src = cfg.source_lang or "auto"
+    tgt = cfg.target_lang
+
+    sys_prompt = (
+        "You are a careful bilingual translator. "
+        "Given an article, split it into paragraphs. For each paragraph, "
+        "first output the original text, then on the next paragraph output "
+        "its translation into the target language. "
+        "Keep the original ordering. Use plain markdown paragraphs, no tables. "
+        f"Source language hint: {src}. Target language: {tgt}."
+    )
+
+    user_prompt = "Produce paragraph-level bilingual text for the following article:\n\n" + text
+
+    payload = {
+        "model": cfg.model,
+        "messages": [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "max_tokens": cfg.max_output_chars // 2 if cfg.max_output_chars > 0 else None,
+    }
+
+    return _post_chat(payload, cfg)

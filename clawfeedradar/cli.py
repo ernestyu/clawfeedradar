@@ -29,6 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--output", help="RSS XML output path (default: $CLAWFEEDRADAR_OUTPUT_DIR/radar.xml)")
     rp.add_argument("--score-threshold", type=float, default=0.0, help="minimum interest_score to keep a candidate")
     rp.add_argument("--max-items", type=int, default=12, help="maximum number of items in the feed")
+    rp.add_argument("--source-lang", help="source language hint for LLM (e.g. en, auto by default)")
+    rp.add_argument("--target-lang", help="target language for summaries/translation (e.g. zh)")
     rp.add_argument("--json", action="store_true", help="also print selected items as JSON to stdout")
     rp.set_defaults(func=_cmd_run)
 
@@ -57,6 +59,8 @@ def _cmd_run(args) -> int:
         score_threshold=float(args.score_threshold or 0.0),
         max_items=int(args.max_items or 0),
         json_stdout=bool(args.json),
+        source_lang=args.source_lang,
+        target_lang=args.target_lang,
     )
 
 

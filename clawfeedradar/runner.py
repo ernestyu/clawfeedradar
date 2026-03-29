@@ -15,8 +15,10 @@ from xml.sax.saxutils import escape
 
 from .config import load_config
 from .embed_client import embed_text
+from .llm_client import load_small_llm_config, generate_bilingual_summary
 from .models import Candidate
 from .scoring import ScoreParams, score_candidates
+from .scrape import fetch_fulltext
 from .sources import detect_source_type, fetch_candidates_from_source
 from .sqlite_interest import load_clusters
 
@@ -82,14 +84,37 @@ def run_radar(
     if max_items > 0:
         selected = selected[: max_items]
 
-    # 5) write JSON sidecar
+    # 5) optional: fetch fulltext + bilingual summaries (serial, best-effort)
+    llm_cfg = load_small_llm_config_from_env()
+    enriched: List[dict] = []
+    for item in selected:
+        c = item.candidate
+        fulltext = fetch_fulltext(c.url) or ""
+        summary_llm = ""
+        if fulltext and llm_cfg is not None:
+            try:
+                summary_llm = generate_bilingual_summary(fulltext, llm_cfg)
+            except Exception:
+                summary_llm = ""
+
+        enriched.append(
+            {
+                "candidate": c,
+                "item": item,
+                "fulltext": fulltext,
+                "summary_llm": summary_llm,
+            }
+        )
+
+    # 6) write JSON sidecar
     output_xml_path = Path(output_xml)
     output_dir = output_xml_path.parent
     output_json_path = output_dir / "radar.json"
 
     payload = []
-    for item in selected:
-        c = item.candidate
+    for row in enriched:
+        c = row["candidate"]
+        item = row["item"]
         payload.append(
             {
                 "id": c.id,
@@ -104,6 +129,8 @@ def run_radar(
                 "best_cluster_id": item.match.best_cluster_id,
                 "sim_best": item.match.sim_best,
                 "sim_second": item.match.sim_second,
+                "fulltext": row["fulltext"],
+                "summary_bilingual": row["summary_llm"],
             }
         )
 
@@ -114,7 +141,7 @@ def run_radar(
     if json_stdout:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
 
-    # 6) write minimal RSS XML
+    # 7) write minimal RSS XML
     now = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S %z")
 
     items_xml: List[str] = []

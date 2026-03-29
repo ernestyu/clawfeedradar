@@ -211,10 +211,27 @@ CLAWFEEDRADAR_OUTPUT_DIR=/home/node/.openclaw/workspace/clawfeedradar/feeds
 # SMALL_LLM_MODEL=your-small-llm
 # SMALL_LLM_API_KEY=sk-your-small-llm-key
 
+# Approximate context limits (used by clawfeedradar when chunking fulltext).
+# These are expressed in characters for simplicity; implementations may
+# convert them to tokens internally if needed.
+# 最大输入长度：每次传给小模型的源文本最大字符数。
+CLAWFEEDRADAR_LLM_MAX_INPUT_CHARS=6000
+# 预期输出长度：便于规划 prompt 和输出预算（不强制截断，以模型端为准）。
+CLAWFEEDRADAR_LLM_MAX_OUTPUT_CHARS=6000
+
+# Rate limiting / concurrency for LLM calls.
+# v0: 所有翻译调用串行执行（不并行）。
+# 如需在自建小模型上加额外保护，可设定两次调用之间的 sleep 间隔（毫秒）。
+CLAWFEEDRADAR_LLM_SLEEP_BETWEEN_MS=500
+
+# Language preferences for translation.
+# 例如："en,zh" 表示输出中英对照；未来可扩展为多语言。
+CLAWFEEDRADAR_LLM_TARGET_LANGS=en,zh
+
 # External scraper command for fulltext fetch (recommended: clawfetch wrapper)
 # The command should accept a URL and emit markdown/plaintext to stdout.
 # Example (pseudo): CLAWFEEDRADAR_SCRAPE_CMD="clawfetch --url"
-# or a shell wrapper that internally调用 clawfetch skill。
+# or a shell wrapper that internally 调用 clawfetch skill。
 # CLAWFEEDRADAR_SCRAPE_CMD=clawfetch --url
 
 # Interest mixing weight (used by clawsqlite build-interest-clusters)

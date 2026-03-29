@@ -211,6 +211,12 @@ CLAWFEEDRADAR_OUTPUT_DIR=/home/node/.openclaw/workspace/clawfeedradar/feeds
 # SMALL_LLM_MODEL=your-small-llm
 # SMALL_LLM_API_KEY=sk-your-small-llm-key
 
+# External scraper command for fulltext fetch (recommended: clawfetch wrapper)
+# The command should accept a URL and emit markdown/plaintext to stdout.
+# Example (pseudo): CLAWFEEDRADAR_SCRAPE_CMD="clawfetch --url"
+# or a shell wrapper that internally调用 clawfetch skill。
+# CLAWFEEDRADAR_SCRAPE_CMD=clawfetch --url
+
 # Interest mixing weight (used by clawsqlite build-interest-clusters)
 # CLAWSQLITE_INTEREST_TAG_WEIGHT=0.75
 
@@ -400,7 +406,43 @@ def compute_final_score(c: Candidate, interest_score: float) -> float:
 
 ## 7. Feed 输出与发布
 
-### 7.1 同时输出 XML 与 JSON
+### 7.1 内容生成流水线（抓全文 + 中英对译）
+
+被选中的候选条目不直接以“链接+短摘要”形式进入 RSS，而是经过两步加工：
+
+1. **抓取全文（fulltext scrape）**
+
+   - 对每个入选 Candidate 调用外部抓取命令：
+
+     ```bash
+     ${CLAWFEEDRADAR_SCRAPE_CMD} <url>
+     ```
+
+   - 该命令应：
+     - 从给定 URL 抓取正文；
+     - 输出 markdown 或可读文本到 stdout；
+     - 推荐实现方式：在 OpenClaw 环境中用一个 shell 包装器调用 `clawfetch` skill，对不同站点做细致适配。
+
+   - 若抓取失败：
+     - 可退回到原始 `summary`/`title` 做简短摘要；
+     - 在 RSS 中标记为“抓取失败，仅保留简介”。
+
+2. **中英对译摘要（LLM 处理）**
+
+   - 将抓取到的全文（或部分截断）传给小模型（SMALL_LLM_*）：
+
+     ```python
+     def generate_bilingual_summary(fulltext: str, meta: Candidate) -> dict:
+         # 返回 title_en/title_zh/summary_en/summary_zh 等字段
+     ```
+
+   - 要求输出：
+     - 英文标题 + 中文标题（可选）；
+     - 分段/段落级中英对译摘要，适合在 RSS 阅读器里“中英对照”阅读；
+   - 若未配置 SMALL_LLM_*：
+     - 可以先只输出英文原文/摘要，留出未来升级空间。
+
+### 7.2 同时输出 XML 与 JSON
 
 每次运行 `clawfeedradar run` 时：
 
@@ -408,6 +450,7 @@ def compute_final_score(c: Candidate, interest_score: float) -> float:
 - 同时输出一个 JSON 文件（例如 `radar.json`），包含：
   - 所有选中条目的字段；
   - 打分明细（interest_score/final_score/best_cluster 等）；
+  - 抓取到的 fulltext 概要（可选）以及中英摘要结果；
 
 文件路径约定：
 

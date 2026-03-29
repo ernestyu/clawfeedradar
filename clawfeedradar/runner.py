@@ -17,7 +17,7 @@ from .config import load_config
 from .embed_client import embed_text
 from .llm_client import load_small_llm_config, generate_preview_summary, generate_bilingual_body
 from .models import Candidate
-from .scoring import ScoreParams, score_candidates
+from .scoring import ScoreParams, score_candidates, load_score_params_from_env
 from .scrape import fetch_fulltext
 from .sources import detect_source_type, fetch_candidates_from_source
 from .sqlite_interest import load_clusters
@@ -45,8 +45,8 @@ def _select_items_with_diversity(
     *,
     score_threshold: float,
     max_items: int,
-    per_cluster_cap: int = 3,
-    explore_count: int = 2,
+    per_cluster_cap: int,
+    explore_count: int,
 ) -> List["ScoredItem"]:
     """Select items with basic diversity + exploration.
 
@@ -146,15 +146,32 @@ def run_radar(
     texts = [f"{c.title}\n\n{c.summary}" for c in candidates]
     embs = [embed_text(t, cfg.embedding) for t in texts]
 
-    scored = score_candidates(candidates, embs, clusters, params=ScoreParams())
+    score_params = load_score_params_from_env()
+    scored = score_candidates(candidates, embs, clusters, params=score_params)
 
     # 4) select with basic diversity + exploration
+    # diversity 配额与探索数量可以通过环境变量调节
+    def _int_env(name: str, default: int) -> int:
+        try:
+            raw = os.environ.get(name, "")
+            if not raw:
+                return default
+            v = int(raw)
+            if v <= 0:
+                return default
+            return v
+        except Exception:
+            return default
+
+    per_cluster_cap = _int_env("CLAWFEEDRADAR_PER_CLUSTER_CAP", 3)
+    explore_count = _int_env("CLAWFEEDRADAR_EXPLORE_COUNT", 2)
+
     selected = _select_items_with_diversity(
         scored,
         score_threshold=score_threshold,
         max_items=max_items if max_items > 0 else 12,
-        per_cluster_cap=3,
-        explore_count=2,
+        per_cluster_cap=per_cluster_cap,
+        explore_count=explore_count,
     )
 
     # 5) optional: fetch fulltext + LLM summaries (serial, best-effort)

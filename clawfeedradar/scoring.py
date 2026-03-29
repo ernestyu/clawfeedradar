@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List
+import os
 
 from .models import Candidate, ClusterInfo, InterestMatch, ScoredItem
 from .sqlite_interest import score_against_clusters
@@ -27,6 +28,36 @@ class ScoreParams:
 
     # recency 衰减时间尺度（秒），例如 3 天
     recency_half_life: float = 3 * 24 * 3600.0
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        raw = os.environ.get(name, "")
+        if not raw:
+            return default
+        val = float(raw)
+        return val
+    except Exception:
+        return default
+
+
+def load_score_params_from_env() -> ScoreParams:
+    """Load ScoreParams from environment variables (with sane defaults).
+
+    - CLAWFEEDRADAR_W_SIM_BEST
+    - CLAWFEEDRADAR_W_SIM_SECOND
+    - CLAWFEEDRADAR_W_RECENCY
+    - CLAWFEEDRADAR_W_POPULARITY
+    - CLAWFEEDRADAR_RECENCY_HALF_LIFE_SEC
+    """
+
+    return ScoreParams(
+        w_sim_best=_float_env("CLAWFEEDRADAR_W_SIM_BEST", 0.6),
+        w_sim_second=_float_env("CLAWFEEDRADAR_W_SIM_SECOND", 0.2),
+        w_recency=_float_env("CLAWFEEDRADAR_W_RECENCY", 0.1),
+        w_popularity=_float_env("CLAWFEEDRADAR_W_POPULARITY", 0.1),
+        recency_half_life=_float_env("CLAWFEEDRADAR_RECENCY_HALF_LIFE_SEC", 3 * 24 * 3600.0),
+    )
 
 
 def _recency_weight(published_at: datetime, now: datetime, half_life: float) -> float:

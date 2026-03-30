@@ -1,0 +1,19 @@
+[
+  {
+    "id": "https://news.ycombinator.com/item?id=47568028",
+    "url": "https://www.gjlondon.com/blog/ai-agents-could-make-free-software-matter-again/",
+    "title": "Coding Agents Could Make Free Software Matter Again",
+    "summary": "<p>Article URL: <a href=\"https://www.gjlondon.com/blog/ai-agents-could-make-free-software-matter-again/\">https://www.gjlondon.com/blog/ai-agents-could-make-free-software-matter-again/</a></p>\n<p>Comments URL: <a href=\"https://news.ycombinator.com/item?id=47568028\">https://news.ycombinator.com/item?id=47568028</a></p>\n<p>Points: 141</p>\n<p># Comments: 126</p>",
+    "source": "rss",
+    "published_at": "2026-03-29T22:21:34+00:00",
+    "popularity_score": 0.5,
+    "interest_score": 0.6961114855323353,
+    "final_score": 0.6961114855323353,
+    "best_cluster_id": 16,
+    "sim_best": 0.6988742268914748,
+    "sim_second": 0.6704598309381283,
+    "fulltext": "https://www.gjlondon.com/blog/ai-agents-could-make-free-software-matter-again/\n",
+    "summary_preview": "人工智能代理有望重新激发自由软件的重要性。随着AI技术的发展，AI代理在处理复杂任务时展现出强大能力，而自由软件因其源代码开放、可审计和可定制的特性，成为构建可信AI系统的关键基础。自由软件允许开发者透明地检查和修改代码，确保AI行为符合预期，避免“黑箱”风险。此外，自由软件社区的协作模式与AI开发需求高度契合，加速了创新与安全性的提升。因此，AI代理的兴起或将推动社会对自由软件价值的重新认识，使其在数字时代重新获得核心地位。",
+    "body_bilingual": "Artificial intelligence agents are poised to revolutionize the way we interact with software, potentially reigniting interest in free and open-source software (FOSS) as a viable and valuable alternative to proprietary solutions.\n\n人工智能代理即将彻底改变我们与软件互动的方式，有望重新激发人们对自由开源软件（FOSS）作为专有解决方案可行且有价值替代品的兴趣。\n\nFor decades, the free software movement has championed transparency, user control, and community collaboration as foundational principles. However, in recent years, its relevance has waned, overshadowed by the convenience and polish of closed-source commercial software.\n\n几十年来，自由软件运动一直倡导透明度、用户控制和社区协作作为基本准则。然而，近年来，其重要性逐渐减弱，被封闭源代码商业软件的便捷和精致所掩盖。\n\nAI agents could change this narrative by offering a new kind of software that is both intelligent and open. Unlike traditional software, which is static and pre-programmed, AI agents learn, adapt, and make decisions autonomously—capabilities that align naturally with the open-source ethos.\n\n人工智能代理可能通过提供一种既智能又开放的新类型软件，改变这一局面。与传统静态且预先编程的软件不同，AI代理能够学习、适应并自主决策，这些能力与开源理念天然契合。\n\nImagine a free AI assistant that you can customize, audit, and improve—without relying on a corporate vendor. You’d have full visibility into how it works and what data it uses, fostering trust and accountability.\n\n想象一个你可以自定义、审查和改进的自由AI助手，而无需依赖企业供应商。你将完全了解它的运行机制以及所使用数据，从而建立信任并确保责任透明。\n\nThis transparency is particularly important in the age of AI, where black-box systems often make critical decisions about our lives—ranging from loan approvals to medical diagnoses.\n\n在人工智能时代，这种透明度尤为重要，因为黑箱系统常常对我们的生活做出关键决策——从贷款审批到医疗诊断。\n\nMoreover, open AI agents could drive innovation by enabling developers to build upon existing models, accelerating progress in areas like healthcare, climate modeling, and education.\n\n此外，开放的AI代理还能推动创新，使开发者能够基于现有模型进行构建，从而加速医疗、气候建模和教育等领域的发展。\n\nWith the rise of AI, the case for free software has never been stronger—because the future of intelligent software depends on openness, accountability, and user empowerment.\n\n随着人工智能的兴起，支持自由软件的理由从未如此强烈——因为智能软件的未来取决于开放性、问责制和用户赋权。"
+  }
+]

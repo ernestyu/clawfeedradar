@@ -94,25 +94,47 @@ def compute_interest_score(
     return interest, match
 
 
-# 源特化通道占位 --------------------------------------------
+# 源特化通道 --------------------------------------------
 
 def score_generic_extra(cand: Candidate, base: float) -> float:
     return 0.0
 
 
 def score_hn_extra(cand: Candidate, base: float) -> float:
+    """基于 HN points/comments 的附加分。"""
+
     meta = cand.source_meta or {}
     points = float(meta.get("hn_points", 0) or 0)
     comments = float(meta.get("hn_comments", 0) or 0)
-    return 0.5 * (points / 500.0) + 0.5 * (comments / 100.0)
+    # 归一化到大致 0..1 区间
+    s_points = min(1.0, points / 500.0)
+    s_comments = min(1.0, comments / 100.0)
+    return 0.5 * s_points + 0.5 * s_comments
+
+
+def score_arxiv_extra(cand: Candidate, base: float) -> float:
+    """基于 arxiv 的简单附加分：偏向近期论文。
+
+    v0: 只看 recency（全局已有 recency 权重，这里只给很轻微的补充）。
+    """
+
+    # 这里先简单返回 0，后续如有需要可根据 published_at 再加一点增益。
+    return 0.0
 
 
 SOURCE_SCORERS: Dict[str, Any] = {
     "hackernews": score_hn_extra,
+    "arxiv": score_arxiv_extra,
 }
 
+
+def _lambda_source(name: str, default_val: float) -> float:
+    return _float_env(name, default_val)
+
+
 LAMBDA_SOURCE: Dict[str, float] = {
-    "hackernews": 0.2,
+    "hackernews": _lambda_source("CLAWFEEDRADAR_LAMBDA_HN", 0.2),
+    "arxiv": _lambda_source("CLAWFEEDRADAR_LAMBDA_ARXIV", 0.1),
     "default": 0.1,
 }
 

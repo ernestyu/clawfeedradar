@@ -18,6 +18,13 @@ import feedparser
 from ..models import Candidate
 
 
+def _safe_int(s, default: int = 0) -> int:
+    try:
+        return int(s)
+    except Exception:
+        return default
+
+
 def _infer_source_from_link(url: str) -> str:
     try:
         host = urlparse(url).netloc.lower()
@@ -70,13 +77,33 @@ def fetch_candidates_from_rss(source_url: str, *, max_items: int = 100) -> List[
         source = _infer_source_from_link(link)
         published_at = _parse_datetime(e)
 
-        # For generic RSS we don't know popularity; use neutral 0.5
+        # Popularity: source-specific best-effort signals, fallback to neutral 0.5
         pop = 0.5
+        hn_points = None
+        hn_comments = None
+        if source == "hackernews":
+            # hnrss 通常在标题或 summary 中包含 "123 points | 45 comments" 之类格式
+            text = " ".join([title, summary])
+            try:
+                import re
+
+                m = re.search(r"(\d+)\s+points?\s*\|\s*(\d+)\s+comments?", text)
+                if m:
+                    hn_points = _safe_int(m.group(1), 0)
+                    hn_comments = _safe_int(m.group(2), 0)
+                    # 简单归一化到 0..1 区间
+                    pop = min(1.0, 0.5 * (hn_points / 500.0) + 0.5 * (hn_comments / 100.0))
+            except Exception:
+                pass
 
         source_meta = {
             "feed_title": getattr(d.feed, "title", None),
             "feed_url": source_url,
         }
+        if hn_points is not None:
+            source_meta["hn_points"] = hn_points
+        if hn_comments is not None:
+            source_meta["hn_comments"] = hn_comments
 
         cid = getattr(e, "id", None) or link
         out.append(

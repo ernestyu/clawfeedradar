@@ -362,9 +362,13 @@ def schedule_from_sources_json(
 
         try:
             # 暂时忽略 per-source max_entries/threshold，直接传 max_items
+            # 为当前源构造一个临时 sources 文件，仅包含这一条 URL，复用现有 run_radar 流水线。
+            tmp_sources = out_dir / f".{label}.sources.txt"
+            tmp_sources.write_text(url + "\n", encoding="utf-8")
+
             run_radar(
                 root=root,
-                sources_file=str(path),  # NOTE: single URL mode not yet wired; placeholder
+                sources_file=str(tmp_sources),
                 output_xml=str(out_xml),
                 score_threshold=0.0,
                 max_items=max_entries,

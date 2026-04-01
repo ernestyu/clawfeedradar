@@ -24,9 +24,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("demo", help="Run a demo scoring pipeline with fake candidates")
     sp.set_defaults(func=_cmd_demo)
 
-    rp = sub.add_parser("run", help="Run radar on real sources and write a single RSS XML + JSON")
+    rp = sub.add_parser("run", help="Run radar on a single source URL and write a RSS XML + JSON")
     rp.add_argument("--root", help="clawsqlite knowledge root (overrides CLAWSQLITE_ROOT)")
-    rp.add_argument("--sources-file", help="sources.txt path (overrides CLAWFEEDRADAR_SOURCES_FILE)")
+    rp.add_argument("--url", required=True, help="Single feed URL (RSS/HN/etc.) to pull candidates from")
     rp.add_argument("--output", help="RSS XML output path (default: $CLAWFEEDRADAR_OUTPUT_DIR/radar.xml)")
     rp.add_argument("--score-threshold", type=float, default=0.0, help="minimum interest_score to keep a candidate")
     rp.add_argument("--max-items", type=int, default=12, help="maximum number of items in the feed")
@@ -50,9 +50,7 @@ def _cmd_demo(args) -> int:
 
 def _cmd_run(args) -> int:
     root = args.root or os.environ.get("CLAWSQLITE_ROOT")
-    sources_file = args.sources_file or os.environ.get("CLAWFEEDRADAR_SOURCES_FILE")
-    if not sources_file:
-        raise SystemExit("--sources-file or CLAWFEEDRADAR_SOURCES_FILE is required")
+    url = args.url
 
     output_xml = args.output
     if not output_xml:
@@ -61,7 +59,7 @@ def _cmd_run(args) -> int:
 
     return run_radar(
         root=root,
-        sources_file=sources_file,
+        url=url,
         output_xml=output_xml,
         score_threshold=float(args.score_threshold or 0.0),
         max_items=int(args.max_items or 0),

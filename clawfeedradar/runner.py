@@ -23,19 +23,6 @@ from .sources import detect_source_type, fetch_candidates_from_source
 from .sqlite_interest import load_clusters
 
 
-def _load_sources_file(path: str) -> List[str]:
-    out: List[str] = []
-    p = Path(path)
-    if not p.is_file():
-        return out
-    for line in p.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        out.append(line)
-    return out
-
-
 def _ensure_parent_dir(path: str) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -275,7 +262,7 @@ def _run_pipeline_for_candidates(
 def run_radar(
     *,
     root: str | None,
-    sources_file: str,
+    url: str,
     output_xml: str,
     score_threshold: float,
     max_items: int,
@@ -283,20 +270,19 @@ def run_radar(
     source_lang: str | None,
     target_lang: str | None,
 ) -> int:
-    """File-based entrypoint (kept for manual runs).
+    """Run radar for a single source URL.
 
-    In v0 this reads a sources.txt file (one URL per line), fetches
-    candidates from all URLs, and then runs the shared pipeline.
+    This is intended for manual runs / debugging: you pass one RSS/HN/etc.
+    URL and the pipeline fetches candidates from that source only.
     """
-    # 从 sources 文件拉取候选
-    source_urls = _load_sources_file(sources_file)
-    candidates: list[Candidate] = []
-    for url in source_urls:
-        stype = detect_source_type(url)
-        if stype == "unknown":
-            continue
-        cands = fetch_candidates_from_source(stype, url)
-        candidates.extend(cands)
+    if not url:
+        raise RuntimeError("url is required")
+
+    stype = detect_source_type(url)
+    if stype == "unknown":
+        raise RuntimeError(f"unknown source type for URL: {url}")
+
+    candidates = fetch_candidates_from_source(stype, url)
 
     return _run_pipeline_for_candidates(
         root=root,

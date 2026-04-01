@@ -273,3 +273,113 @@ def run_radar(
     output_xml_path.write_text(rss, encoding="utf-8")
 
     return 0
+
+def schedule_from_sources_json(
+    *,
+    root: str | None,
+    sources_json_path: str,
+    output_dir: str,
+) -> int:
+    """Scan sources.json and run per-source radar when due.
+
+    sources.json 格式示例：
+
+    [
+      {
+        "label": "hn-frontpage",
+        "url": "https://hnrss.org/frontpage",
+        "interval_hours": 8,
+        "max_entries": 25,
+        "source_lang": "en",
+        "target_lang": "zh",
+        "last_success_at": null,
+        "last_error": null
+      },
+      ...
+    ]
+
+    - 配置字段由人维护；
+    - last_success_at / last_error 由本函数在每次抓取后更新。
+    """
+
+    if root:
+        os.environ["CLAWSQLITE_ROOT"] = root
+
+    cfg = load_config()
+
+    path = Path(sources_json_path)
+    if not path.is_file():
+        raise RuntimeError(f"sources.json not found at {sources_json_path}")
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise RuntimeError(f"Failed to parse sources.json: {e}") from e
+
+    if not isinstance(data, list):
+        raise RuntimeError("sources.json must be a JSON array")
+
+    now = datetime.now(timezone.utc)
+    changed = False
+
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        label = entry.get("label") or ""
+        url = entry.get("url") or ""
+        interval_hours = int(entry.get("interval_hours") or 0)
+        max_entries = int(entry.get("max_entries") or 0) or 25
+        source_lang = entry.get("source_lang")
+        target_lang = entry.get("target_lang")
+
+        if not label or not url or interval_hours <= 0:
+            continue
+
+        last_success_at_raw = entry.get("last_success_at")
+        last_success_at = None
+        if isinstance(last_success_at_raw, str):
+            try:
+                last_success_at = datetime.fromisoformat(last_success_at_raw)
+                if last_success_at.tzinfo is None:
+                    last_success_at = last_success_at.replace(tzinfo=timezone.utc)
+            except Exception:
+                last_success_at = None
+
+        due = False
+        if last_success_at is None:
+            due = True
+        else:
+            delta = now - last_success_at
+            if delta.total_seconds() >= interval_hours * 3600:
+                due = True
+
+        if not due:
+            continue
+
+        # 构造 per-source 输出路径：output_dir/{label}.xml
+        out_dir = Path(output_dir)
+        out_xml = out_dir / f"{label}.xml"
+
+        try:
+            # 暂时忽略 per-source max_entries/threshold，直接传 max_items
+            run_radar(
+                root=root,
+                sources_file=str(path),  # NOTE: single URL mode not yet wired; placeholder
+                output_xml=str(out_xml),
+                score_threshold=0.0,
+                max_items=max_entries,
+                json_stdout=False,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
+            entry["last_success_at"] = now.isoformat()
+            entry["last_error"] = None
+            changed = True
+        except Exception as e:  # noqa: BLE001
+            entry["last_error"] = str(e)
+            changed = True
+
+    if changed:
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return 0

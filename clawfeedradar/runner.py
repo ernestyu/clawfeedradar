@@ -107,10 +107,12 @@ def _select_items_with_diversity(
     return main_selected + explore_selected
 
 
-def run_radar(
+
+
+def _run_pipeline_for_candidates(
     *,
     root: str | None,
-    sources_file: str,
+    candidates: list[Candidate],
     output_xml: str,
     score_threshold: float,
     max_items: int,
@@ -118,6 +120,11 @@ def run_radar(
     source_lang: str | None,
     target_lang: str | None,
 ) -> int:
+    """Core radar pipeline given an explicit candidate list.
+
+    Shared by both `run_radar` (sources file based) and
+    `schedule_from_sources_json` (sources.json based).
+    """
     # 确保 root 传递给 config
     if root:
         os.environ["CLAWSQLITE_ROOT"] = root
@@ -129,28 +136,17 @@ def run_radar(
     if not clusters:
         raise RuntimeError("No interest_clusters found; run 'clawsqlite knowledge build-interest-clusters' first")
 
-    # 2) load sources and fetch candidates
-    source_urls = _load_sources_file(sources_file)
-    candidates: List[Candidate] = []
-    for url in source_urls:
-        stype = detect_source_type(url)
-        if stype == "unknown":
-            continue
-        cands = fetch_candidates_from_source(stype, url)
-        candidates.extend(cands)
-
     if not candidates:
-        raise RuntimeError("No candidates fetched from sources; check sources file and network")
+        raise RuntimeError("No candidates provided to radar pipeline")
 
-    # 3) embed and score
+    # 2) embed and score
     texts = [f"{c.title}\n\n{c.summary}" for c in candidates]
     embs = [embed_text(t, cfg.embedding) for t in texts]
 
     score_params = load_score_params_from_env()
     scored = score_candidates(candidates, embs, clusters, params=score_params)
 
-    # 4) select with basic diversity + exploration
-    # diversity 配额与探索数量可以通过环境变量调节
+    # 3) select with basic diversity + exploration
     def _int_env(name: str, default: int) -> int:
         try:
             raw = os.environ.get(name, "")
@@ -174,9 +170,9 @@ def run_radar(
         explore_count=explore_count,
     )
 
-    # 5) optional: fetch fulltext + LLM summaries (serial, best-effort)
+    # 4) optional: fetch fulltext + LLM summaries (serial, best-effort)
     llm_cfg = load_small_llm_config(source_lang_override=source_lang, target_lang_override=target_lang)
-    enriched: List[dict] = []
+    enriched: list[dict] = []
     for item in selected:
         c = item.candidate
         fulltext = fetch_fulltext(c.url) or ""
@@ -200,7 +196,7 @@ def run_radar(
             }
         )
 
-    # 6) write JSON sidecar
+    # 5) write JSON sidecar
     output_xml_path = Path(output_xml)
     output_dir = output_xml_path.parent
     output_json_path = output_dir / "radar.json"
@@ -236,10 +232,10 @@ def run_radar(
     if json_stdout:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
 
-    # 7) write minimal RSS XML
+    # 6) write minimal RSS XML
     now = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S %z")
 
-    items_xml: List[str] = []
+    items_xml: list[str] = []
     for row in enriched:
         c = row["candidate"]
         item = row["item"]
@@ -259,20 +255,60 @@ def run_radar(
         )
 
     rss = (
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"\
-        "<rss version=\"2.0\">"\
-        "<channel>"\
-        "<title>clawfeedradar</title>"\
-        "<link>https://example.com/</link>"\
-        "<description>Personal feed radar powered by clawsqlite.</description>"\
-        f"<lastBuildDate>{now}</lastBuildDate>"\
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<rss version=\"2.0\">"
+        "<channel>"
+        "<title>clawfeedradar</title>"
+        "<link>https://example.com/</link>"
+        "<description>Personal feed radar powered by clawsqlite.</description>"
+        f"<lastBuildDate>{now}</lastBuildDate>"
         + "".join(items_xml) + "</channel></rss>"
     )
+
 
     _ensure_parent_dir(str(output_xml_path))
     output_xml_path.write_text(rss, encoding="utf-8")
 
     return 0
+
+
+def run_radar(
+    *,
+    root: str | None,
+    sources_file: str,
+    output_xml: str,
+    score_threshold: float,
+    max_items: int,
+    json_stdout: bool,
+    source_lang: str | None,
+    target_lang: str | None,
+) -> int:
+    """File-based entrypoint (kept for manual runs).
+
+    In v0 this reads a sources.txt file (one URL per line), fetches
+    candidates from all URLs, and then runs the shared pipeline.
+    """
+    # 从 sources 文件拉取候选
+    source_urls = _load_sources_file(sources_file)
+    candidates: list[Candidate] = []
+    for url in source_urls:
+        stype = detect_source_type(url)
+        if stype == "unknown":
+            continue
+        cands = fetch_candidates_from_source(stype, url)
+        candidates.extend(cands)
+
+    return _run_pipeline_for_candidates(
+        root=root,
+        candidates=candidates,
+        output_xml=output_xml,
+        score_threshold=score_threshold,
+        max_items=max_items,
+        json_stdout=json_stdout,
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
+
 
 def schedule_from_sources_json(
     *,
@@ -305,15 +341,13 @@ def schedule_from_sources_json(
     if root:
         os.environ["CLAWSQLITE_ROOT"] = root
 
-    cfg = load_config()
-
     path = Path(sources_json_path)
     if not path.is_file():
         raise RuntimeError(f"sources.json not found at {sources_json_path}")
 
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise RuntimeError(f"Failed to parse sources.json: {e}") from e
 
     if not isinstance(data, list):
@@ -361,14 +395,15 @@ def schedule_from_sources_json(
         out_xml = out_dir / f"{label}.xml"
 
         try:
-            # 暂时忽略 per-source max_entries/threshold，直接传 max_items
-            # 为当前源构造一个临时 sources 文件，仅包含这一条 URL，复用现有 run_radar 流水线。
-            tmp_sources = out_dir / f".{label}.sources.txt"
-            tmp_sources.write_text(url + "\n", encoding="utf-8")
+            # 为当前源构造候选列表，直接使用 JSON 配置，不再依赖临时 sources.txt
+            stype = detect_source_type(url)
+            if stype == "unknown":
+                continue
+            candidates = fetch_candidates_from_source(stype, url)
 
-            run_radar(
+            _run_pipeline_for_candidates(
                 root=root,
-                sources_file=str(tmp_sources),
+                candidates=candidates,
                 output_xml=str(out_xml),
                 score_threshold=0.0,
                 max_items=max_entries,

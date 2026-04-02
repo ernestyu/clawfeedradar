@@ -28,39 +28,53 @@ def fetch_fulltext(url: str, *, timeout: int = 300) -> str:
     # Simple template: append URL as last argument.
     # If users need more control, they can write a wrapper script.
     cmd = f"{cmd_tpl} {shlex.quote(url)}"
-    logger.info("[scrape] fetching fulltext: %s", url)
 
-    try:
-        proc = subprocess.run(
-            cmd,
-            shell=True,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout,
-            text=True,
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning("[scrape] timeout after %ds for URL: %s", timeout, url)
-        return ""
-    except Exception as e:
-        logger.error("[scrape] error running command for URL %s: %s", url, e)
-        return ""
+    max_retries = 3
+    backoff_min = 5.0
+    backoff_max = 10.0
 
-    if proc.returncode != 0:
-        stderr_snippet = (proc.stderr or "")[:200]
-        logger.warning(
-            "[scrape] non-zero exit code %d for URL %s, stderr=%r",
-            proc.returncode,
-            url,
-            stderr_snippet,
-        )
-        return ""
+    last_exc = None
+    for attempt in range(1, max_retries + 1):
+        logger.info("[scrape] fetching fulltext (attempt %d/%d): %s", attempt, max_retries, url)
+        try:
+            proc = subprocess.run(
+                cmd,
+                shell=True,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+                text=True,
+            )
+        except subprocess.TimeoutExpired as e:
+            last_exc = e
+            logger.warning("[scrape] timeout after %ds for URL: %s", timeout, url)
+        except Exception as e:
+            last_exc = e
+            logger.error("[scrape] error running command for URL %s: %s", url, e)
+        else:
+            if proc.returncode == 0:
+                out = proc.stdout or ""
+                if out.strip():
+                    logger.info(
+                        "[scrape] success, %d characters retrieved for URL: %s", len(out), url
+                    )
+                    return out
+                logger.warning("[scrape] empty output for URL: %s", url)
+            else:
+                stderr_snippet = (proc.stderr or "")[:200]
+                logger.warning(
+                    "[scrape] non-zero exit code %d for URL %s, stderr=%r",
+                    proc.returncode,
+                    url,
+                    stderr_snippet,
+                )
+        if attempt < max_retries:
+            import random, time as _time
 
-    out = proc.stdout or ""
-    if not out.strip():
-        logger.warning("[scrape] empty output for URL: %s", url)
-        return ""
+            delay = random.uniform(backoff_min, backoff_max)
+            logger.info("[scrape] retrying URL %s after %.1fs", url, delay)
+            _time.sleep(delay)
 
-    logger.info("[scrape] success, %d characters retrieved for URL: %s", len(out), url)
-    return out
+    logger.error("[scrape] giving up after %d attempts for URL %s: %r", max_retries, url, last_exc)
+    return ""

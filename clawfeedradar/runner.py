@@ -16,7 +16,7 @@ from typing import List
 from xml.sax.saxutils import escape
 
 from .config import load_config
-from .embed_client import embed_text
+from .embed_client import embed_text, embed_texts
 from .llm_client import load_small_llm_config, generate_preview_summary, generate_bilingual_body
 from .models import Candidate
 from .scoring import ScoreParams, score_candidates, load_score_params_from_env

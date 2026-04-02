@@ -10,6 +10,7 @@ v0: 使用与 clawsqlite 相同的 OpenAI-compatible embeddings API，
 import json
 import logging
 import os
+import time
 from typing import List
 
 import httpx
@@ -48,14 +49,40 @@ def embed_text(text: str, cfg: EmbeddingConfig, *, timeout: int = 60) -> List[fl
         ),
     }
 
-    try:
-        resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
-    except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException) as e:
-        logger.warning("[embedding] timeout for %d chars, returning zero vector: %s", len(text), e)
-        return [0.0] * cfg.vec_dim
-    except Exception as e:
-        logger.error("[embedding] request failed: %s", e)
-        raise RuntimeError(f"Embedding request failed: {e}")
+    # simple retry loop for transient timeouts
+    max_retries = int(os.environ.get("CLAWFEEDRADAR_EMBED_RETRIES", "3") or "3")
+    if max_retries < 1:
+        max_retries = 1
+    backoff = float(os.environ.get("CLAWFEEDRADAR_EMBED_RETRY_BACKOFF_SEC", "1.0") or "1.0")
+
+    last_exc = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+            break
+        except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+            last_exc = e
+            if attempt < max_retries:
+                logger.warning(
+                    "[embedding] timeout (attempt %d/%d, %d chars), retrying in %.1fs: %s",
+                    attempt,
+                    max_retries,
+                    len(text),
+                    backoff,
+                    e,
+                )
+                time.sleep(backoff)
+                continue
+            logger.warning(
+                "[embedding] timeout after %d attempts for %d chars, returning zero vector: %s",
+                max_retries,
+                len(text),
+                e,
+            )
+            return [0.0] * cfg.vec_dim
+        except Exception as e:
+            logger.error("[embedding] request failed: %s", e)
+            raise RuntimeError(f"Embedding request failed: {e}")
 
     if resp.status_code >= 400:
         snippet = resp.text[:300]

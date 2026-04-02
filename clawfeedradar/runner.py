@@ -167,6 +167,13 @@ def _run_pipeline_for_candidates(
         explore_count=explore_count,
     )
 
+    logger.info(
+        "[pipeline] selected %d items (score_threshold=%.3f, max_items=%d)",
+        len(selected),
+        float(score_threshold),
+        int(max_items if max_items > 0 else 12),
+    )
+
     # 4) optional: fetch fulltext + LLM summaries (serial, best-effort)
     llm_cfg = load_small_llm_config(source_lang_override=source_lang, target_lang_override=target_lang)
     enriched: list[dict] = []

@@ -50,8 +50,8 @@ def embed_text(text: str, cfg: EmbeddingConfig, *, timeout: int = 60) -> List[fl
 
     try:
         resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
-    except httpx.ReadTimeout as e:
-        logger.warning("[embedding] ReadTimeout for %d chars, returning zero vector: %s", len(text), e)
+    except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+        logger.warning("[embedding] timeout for %d chars, returning zero vector: %s", len(text), e)
         return [0.0] * cfg.vec_dim
     except Exception as e:
         logger.error("[embedding] request failed: %s", e)

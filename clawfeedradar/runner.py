@@ -9,6 +9,7 @@ v0: 从 sources 文件拉取候选 → 兴趣打分 → 选出前 N 条 → 写 
 import json
 import logging
 import os
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
@@ -25,6 +26,35 @@ from .sqlite_interest import load_clusters
 
 
 logger = logging.getLogger("clawfeedradar")
+
+
+def _get_interest_clusters_last_built_at(db_path: str):
+    """Return last built time for interest clusters from interest_meta table.
+
+    Requires clawsqlite to write a key='interest_clusters_last_built_at'
+    ISO-8601 timestamp into interest_meta. Returns a timezone-aware
+    datetime or None if unavailable.
+    """
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT value FROM interest_meta WHERE key='interest_clusters_last_built_at'"
+            ).fetchone()
+            if not row:
+                return None
+            value = row[0]
+            if not value:
+                return None
+            dt = datetime.fromisoformat(value)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        finally:
+            conn.close()
+    except Exception:
+        return None
 
 
 def _ensure_parent_dir(path: str) -> None:
@@ -123,6 +153,20 @@ def _run_pipeline_for_candidates(
     cfg = load_config()
 
     logger.info("[pipeline] using KB at %s", cfg.kb.db_path)
+
+    # warn if clusters are stale (requires clawsqlite to populate interest_meta)
+    last_built = _get_interest_clusters_last_built_at(cfg.kb.db_path)
+    if last_built is not None:
+        age_days = (datetime.now(timezone.utc) - last_built).days
+        if age_days >= 7:
+            logger.warning(
+                "[pipeline] interest_clusters last built %d days ago - consider rerunning 'clawsqlite knowledge build-interest-clusters'",
+                age_days,
+            )
+    else:
+        logger.warning(
+            "[pipeline] interest_clusters last built time unknown - consider running 'clawsqlite knowledge build-interest-clusters'"
+        )
 
     # 1) load clusters
     clusters = load_clusters(cfg.kb.db_path, cfg.embedding.vec_dim)

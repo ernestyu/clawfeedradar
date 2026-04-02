@@ -10,14 +10,58 @@ Commands:
 """
 
 import argparse
+import logging
 import os
 import sys
 
 from .demo import run_demo
 from .runner import run_radar, schedule_from_sources_json
 from .config import load_project_env
+from pathlib import Path
 
 load_project_env()
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+
+
+_def_log_initialized = False
+
+
+def _setup_logging() -> None:
+    """Setup file-based logging for clawfeedradar.
+
+    - Log level from CLAWFEEDRADAR_LOG_LEVEL (default: INFO).
+    - Log file: <repo_root>/logs/clawfeedradar.log
+    - Attach same handler to `clawfeedradar` and `httpx` loggers.
+    """
+    global _def_log_initialized
+    if _def_log_initialized:
+        return
+    _def_log_initialized = True
+
+    level_name = os.environ.get("CLAWFEEDRADAR_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+
+    logs_dir = ROOT_DIR / 'logs'
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = logs_dir / 'clawfeedradar.log'
+
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s")
+    fh = logging.FileHandler(log_path, encoding='utf-8')
+    fh.setFormatter(formatter)
+
+    app_logger = logging.getLogger('clawfeedradar')
+    app_logger.setLevel(level)
+    app_logger.propagate = False
+    if not any(isinstance(h, logging.FileHandler) and getattr(h, 'baseFilename', None) == str(log_path) for h in app_logger.handlers):
+        app_logger.addHandler(fh)
+
+    httpx_logger = logging.getLogger('httpx')
+    httpx_logger.setLevel(level)
+    httpx_logger.propagate = False
+    if not any(isinstance(h, logging.FileHandler) and getattr(h, 'baseFilename', None) == str(log_path) for h in httpx_logger.handlers):
+        httpx_logger.addHandler(fh)
 
 
 def build_parser() -> argparse.ArgumentParser:

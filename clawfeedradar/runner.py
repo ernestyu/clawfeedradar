@@ -7,6 +7,7 @@ v0: 从 sources 文件拉取候选 → 兴趣打分 → 选出前 N 条 → 写 
 """
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,9 @@ from .scoring import ScoreParams, score_candidates, load_score_params_from_env
 from .scrape import fetch_fulltext
 from .sources import detect_source_type, fetch_candidates_from_source
 from .sqlite_interest import load_clusters
+
+
+logger = logging.getLogger("clawfeedradar")
 
 
 def _ensure_parent_dir(path: str) -> None:
@@ -118,19 +122,25 @@ def _run_pipeline_for_candidates(
 
     cfg = load_config()
 
+    logger.info("[pipeline] using KB at %s", cfg.kb.db_path)
+
     # 1) load clusters
     clusters = load_clusters(cfg.kb.db_path, cfg.embedding.vec_dim)
+    logger.info("[pipeline] loaded %d clusters", len(clusters))
     if not clusters:
         raise RuntimeError("No interest_clusters found; run 'clawsqlite knowledge build-interest-clusters' first")
 
     if not candidates:
         raise RuntimeError("No candidates provided to radar pipeline")
 
+    logger.info("[pipeline] embedding %d candidates", len(candidates))
+
     # 2) embed and score
     texts = [f"{c.title}\n\n{c.summary}" for c in candidates]
     embs = [embed_text(t, cfg.embedding) for t in texts]
 
     score_params = load_score_params_from_env()
+    logger.info("[pipeline] scoring %d candidates", len(candidates))
     scored = score_candidates(candidates, embs, clusters, params=score_params)
 
     # 3) select with basic diversity + exploration
@@ -327,6 +337,8 @@ def schedule_from_sources_json(
     if root:
         os.environ["CLAWSQLITE_ROOT"] = root
 
+    logger.info("[schedule] scanning sources.json from %s", sources_json_path)
+
     path = Path(sources_json_path)
     if not path.is_file():
         raise RuntimeError(f"sources.json not found at {sources_json_path}")
@@ -353,6 +365,7 @@ def schedule_from_sources_json(
         target_lang = entry.get("target_lang")
 
         if not label or not url or interval_hours <= 0:
+            logger.warning("[schedule] skip entry with invalid config: %s", entry)
             continue
 
         last_success_at_raw = entry.get("last_success_at")
@@ -374,6 +387,7 @@ def schedule_from_sources_json(
                 due = True
 
         if not due:
+            logger.info("[schedule] skip %s (not due yet)", label)
             continue
 
         # 构造 per-source 输出路径：output_dir/{label}.xml
@@ -381,11 +395,12 @@ def schedule_from_sources_json(
         out_xml = out_dir / f"{label}.xml"
 
         try:
-            # 为当前源构造候选列表，直接使用 JSON 配置，不再依赖临时 sources.txt
             stype = detect_source_type(url)
             if stype == "unknown":
+                logger.warning("[schedule] unknown source type for %s", url)
                 continue
             candidates = fetch_candidates_from_source(stype, url)
+            logger.info("[schedule] fetched %d candidates for %s", len(candidates), label)
 
             _run_pipeline_for_candidates(
                 root=root,
@@ -401,6 +416,7 @@ def schedule_from_sources_json(
             entry["last_error"] = None
             changed = True
         except Exception as e:  # noqa: BLE001
+            logger.error("[schedule] error while processing %s: %s", label, e)
             entry["last_error"] = str(e)
             changed = True
 

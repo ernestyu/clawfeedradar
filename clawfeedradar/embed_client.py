@@ -8,12 +8,16 @@ v0: 使用与 clawsqlite 相同的 OpenAI-compatible embeddings API，
 """
 
 import json
+import logging
 import os
 from typing import List
 
 import httpx
 
 from .config import EmbeddingConfig
+
+
+logger = logging.getLogger("clawfeedradar")
 
 
 def _embeddings_url(base_url: str) -> str:
@@ -46,11 +50,16 @@ def embed_text(text: str, cfg: EmbeddingConfig, *, timeout: int = 60) -> List[fl
 
     try:
         resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+    except httpx.ReadTimeout as e:
+        logger.warning("[embedding] ReadTimeout for %d chars, returning zero vector: %s", len(text), e)
+        return [0.0] * cfg.vec_dim
     except Exception as e:
+        logger.error("[embedding] request failed: %s", e)
         raise RuntimeError(f"Embedding request failed: {e}")
 
     if resp.status_code >= 400:
         snippet = resp.text[:300]
+        logger.warning("[embedding] HTTPError %s %s: %s", resp.status_code, resp.reason_phrase, snippet)
         raise RuntimeError(
             f"Embedding HTTPError: {resp.status_code} {resp.reason_phrase} {snippet}"
         )
@@ -68,4 +77,5 @@ def embed_text(text: str, cfg: EmbeddingConfig, *, timeout: int = 60) -> List[fl
         else:
             return vec + [0.0] * (cfg.vec_dim - len(vec))
     except Exception as e:
+        logger.error("[embedding] response parse failed: %s; body=%s", e, body[:300])
         raise RuntimeError(f"Embedding response parse failed: {e}; body={body[:300]}")

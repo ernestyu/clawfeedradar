@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>clawfeedradar</title><link>https://example.com/</link><description>Personal feed radar powered by clawsqlite.</description><lastBuildDate>Thu, 02 Apr 2026 10:56:34 +0000</lastBuildDate><item><title>StepFun 3.5 Flash is #1 cost-effective model for OpenClaw tasks (300 battles)</title><link>https://app.uniclaw.ai/arena?tab=costEffectiveness&amp;via=hn</link><description>在OpenClaw Arena的性价比排名中，Step 3.5 Flash以1327分位居榜首，其排名范围为1至3，显示较高的确定性。紧随其后的是Grok 4.1 Fast，得分为1274，排名范围同样为1至3。Minimax M2.7位列第三，得分为1182，排名范围为1至5。
+
+其他模型如Gemini 3 Flash Preview、Gpt 5.3 Codex和Claude Haiku 4.5也表现出色，得分在1100分以上，对战次数超过70次，具有较好的稳定性。随着排名下降，模型得分逐渐降低，如Claude Opus 4.6得分为730，对战数为64，而Nemotron 3 Super 120b A12b得分最低，为568，但其对战次数仍达73次，表明评估数据相对充分。整体来看，前五名模型在性能和可靠性上表现突出。</description><pubDate>Wed, 01 Apr 2026 16:17:35 +0000</pubDate></item><item><title>A new C++ back end for ocamlc</title><link>https://github.com/ocaml/ocaml/pull/14701</link><description>此补丁为 `ocamlc` 添加了新的 C++ 后端，替代了当前运行时和 FFI 所用的非增量式 C 代码。它将 OCaml 程序转换为风格自然、可读性高的 C++ 代码。例如，一个计算指定范围内素数的简单程序，可通过编译生成对应的 `primes.cpp` 文件，其中包含完整的 C++ 实现。
+
+生成的 C++ 代码使用模板和类型元编程实现 OCaml 的函数式特性，如列表操作和递归。由于 C++ 不支持可变状态，该后端要求程序完全采用纯函数式风格，因此 OCaml 标准库不可用，需手动重写如 `List` 模块等依赖可变状态的部分。
+
+要运行生成的 C++ 程序，需使用支持 C++ 的解释器，如 `g++`。该功能为 OCaml 提供了更高效、更现代的代码生成选项，同时推动了 OCaml 在函数式语言与现代 C++ 之间桥梁的探索。</description><pubDate>Wed, 01 Apr 2026 23:35:02 +0000</pubDate></item><item><title>InspectMind AI (YC W24) Is Hiring</title><link>https://www.ycombinator.com/companies/inspectmind-ai/jobs/jQNra64-software-engineer-build-the-world-s-best-ai-plan-checker</link><description>InspectMind AI 正在打造全球最优秀的 AI 施工图审查系统，旨在通过AI自动检查建筑图纸、规范和计算文档中的错误，减少施工前的失误、延误和安全隐患。公司已实现月均100%以上增长，拥有数百名付费客户，服务覆盖数据中⼼、医院、学校、能源设施等众多项目，遍及全球多个国家和地区。
+
+当前核心挑战在于将海量原始检测结果转化为高精度、低噪声、可操作的洞察，提升系统的可信度与用户采纳率。团队正在攻克计算机视觉、AI代理设计和系统架构等关键技术难题。软件工程师将全程负责产品功能的开发，直接对接工程师、建筑师等用户，从构思到上线全程主导，快速交付并看到真实世界的影响。
+
+团队由谷歌、Airbnb、伯克利、卡内基梅隆等顶尖机构背景的成员组成，为 Y Combinator W24 孵化项目，强调高效率、强所有权和快速迭代。技术栈为 AWS + NextJS，鼓励使用 AI 编程代理（如 Claude Code、Codex）提升开发速度，同时保证代码质量与安全。如果你渴望用AI推动真实世界的变革，打造影响全球建筑安全的产品，这是一次不容错过的机会。</description><pubDate>Wed, 01 Apr 2026 21:00:06 +0000</pubDate></item><item><title>Artemis II Launch Day Updates</title><link>https://www.nasa.gov/blogs/missions/2026/04/01/live-artemis-ii-launch-day-updates/</link><description>&lt;p&gt;&lt;a href="https://www.youtube.com/live/Tf_UjBMIzNo" rel="nofollow"&gt;https://www.youtube.com/live/Tf_UjBMIzNo&lt;/a&gt;&lt;/p&gt;
+&lt;hr /&gt;
+&lt;p&gt;Comments URL: &lt;a href="https://news.ycombinator.com/item?id=47603657"&gt;https://news.ycombinator.com/item?id=47603657&lt;/a&gt;&lt;/p&gt;
+&lt;p&gt;Points: 926&lt;/p&gt;
+&lt;p&gt;# Comments: 796&lt;/p&gt;</description><pubDate>Wed, 01 Apr 2026 17:11:31 +0000</pubDate></item><item><title>Telli (YC F24) is hiring engineers, designers, and more [on-site, Berlin]</title><link>http://hi.telli.com/join-us</link><description>我们正在打造一个面向消费者的AI语音代理平台。电话沟通长期面临排队久、客服效率低等问题，尽管语音是最自然的交流方式，却难以规模化。随着大语言模型不断进步，我们相信未来每个B2C企业——从能源、电信到保险——都将拥有AI语音代理，实现高效、流畅的客户服务。这一机会巨大，而我们坚信自己能够赢得未来。
+
+与此同时，团队在工作中也充满乐趣。我们诚邀热爱技术、富有创造力的工程师、产品经理和设计师加入，共同构建下一代语音交互体验。</description><pubDate>Thu, 02 Apr 2026 07:17:50 +0000</pubDate></item></channel></rss>

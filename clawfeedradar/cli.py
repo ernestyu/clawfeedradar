@@ -20,6 +20,7 @@ from .config import load_project_env
 from pathlib import Path
 
 load_project_env()
+_setup_logging()
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]

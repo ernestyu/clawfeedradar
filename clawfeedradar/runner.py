@@ -28,6 +28,39 @@ from .sqlite_interest import load_clusters
 logger = logging.getLogger("clawfeedradar")
 
 
+
+def _build_long_summary(fulltext: str, approx_chars: int = 1200) -> str:
+    """Build a long summary from fulltext similar to clawsqlite logic.
+
+    Heuristic:
+      - Treat paragraphs separated by blank lines as units.
+      - Take leading paragraphs until we reach roughly `approx_chars`
+        characters, always stopping at a paragraph boundary.
+      - Append the last non-empty paragraph if it is not already included.
+    """
+    if not fulltext:
+        return ""
+
+    # Normalize newlines
+    text = fulltext.replace("\r\n", "\n").replace("\r", "\n")
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    if not paragraphs:
+        return ""
+
+    head_parts: list[str] = []
+    total = 0
+    for p in paragraphs:
+        head_parts.append(p)
+        total += len(p) + 2  # account for blank line separators
+        if total >= approx_chars:
+            break
+
+    last = paragraphs[-1]
+    if last not in head_parts:
+        head_parts.append("")  # blank line separator
+        head_parts.append(last)
+
+    return "\n\n".join(head_parts)
 def _get_interest_clusters_last_built_at(db_path: str):
     """Return last built time for interest clusters from interest_meta table.
 
@@ -179,8 +212,23 @@ def _run_pipeline_for_candidates(
 
     logger.info("[pipeline] embedding %d candidates", len(candidates))
 
-    # 2) embed and score
-    texts = [f"{c.title}\n\n{c.summary}" for c in candidates]
+    # 2) embed and score - fetch fulltext once per URL, then build long summaries
+    fulltexts: dict[str, str] = {}
+    for c in candidates:
+        url = c.url
+        if not url or url in fulltexts:
+            continue
+        fulltexts[url] = fetch_fulltext(url) or ""
+
+    texts: list[str] = []
+    for c in candidates:
+        fulltext = fulltexts.get(c.url, "")
+        long_summary = _build_long_summary(fulltext)
+        if not long_summary:
+            # Fallback: use title + summary if fulltext is unavailable
+            long_summary = f"{c.title}\n\n{c.summary}"
+        texts.append(long_summary)
+
     embs = [embed_text(t, cfg.embedding) for t in texts]
 
     score_params = load_score_params_from_env()

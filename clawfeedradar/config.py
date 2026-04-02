@@ -13,6 +13,50 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+_PROJECT_ENV_LOADED = False
+
+
+def load_project_env() -> None:
+    """Load .env from project root with higher precedence than system env.
+
+    Precedence order (highest to lowest):
+    1. CLI arguments (handled in cli.py and not touched here)
+    2. Project .env file at repo root (clawfeedradar/.env)
+    3. Existing process environment variables.
+
+    This helper parses simple KEY=VALUE lines; lines starting with '#' or
+    without '=' are ignored. Quotes around VALUE are stripped.
+    """
+    global _PROJECT_ENV_LOADED
+    if _PROJECT_ENV_LOADED:
+        return
+    _PROJECT_ENV_LOADED = True
+
+    try:
+        from pathlib import Path
+
+        root_dir = Path(__file__).resolve().parents[1]
+        env_path = root_dir / '.env'
+        if not env_path.is_file():
+            return
+        for line in env_path.read_text(encoding='utf-8').splitlines():
+            line = line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, _, value = line.partition('=')
+            key = key.strip()
+            value = value.strip()
+            if not key:
+                continue
+            # strip simple quotes
+            if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+                value = value[1:-1]
+            os.environ[key] = value
+    except Exception:
+        # best-effort; config loading will still rely on existing env
+        return
+
+
 @dataclass
 class EmbeddingConfig:
     base_url: str

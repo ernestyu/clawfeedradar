@@ -61,6 +61,78 @@ def _build_long_summary(fulltext: str, approx_chars: int = 1200) -> str:
         head_parts.append(last)
 
     return "\n\n".join(head_parts)
+def _normalize_url(raw: str) -> str:
+    """Normalize article URL for deduplication.
+
+    - Strip fragment.
+    - Strip trailing slash on path.
+    - Drop common tracking query params (utm_*, fbclid, gclid).
+    """
+    from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return ""
+
+    # Drop fragment
+    fragment = ""
+    path = parsed.path or ""
+    if path != "/":
+        # Remove trailing slash (but keep root '/')
+        if path.endswith("/"):
+            path = path.rstrip("/")
+
+    # Filter query params
+    q = []
+    for k, v in parse_qsl(parsed.query, keep_blank_values=True):
+        kl = k.lower()
+        if kl.startswith("utm_") or kl in {"fbclid", "gclid"}:
+            continue
+        q.append((k, v))
+    query = urlencode(q)
+
+    normalized = urlunparse((parsed.scheme, parsed.netloc, path, "", query, fragment))
+    return normalized
+
+
+def _load_seen_urls_state(path: Path) -> dict[str, datetime]:
+    """Load seen-URLs state, returning url -> datetime (UTC).
+
+    Entries older than 7 days are pruned.
+    """
+    from datetime import timedelta
+
+    seen: dict[str, datetime] = {}
+    if not path.is_file():
+        return seen
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return seen
+    urls = raw.get("urls") or {}
+    now = datetime.now(timezone.utc)
+    window = timedelta(days=7)
+    for url, ts in urls.items():
+        if not isinstance(url, str) or not isinstance(ts, str):
+            continue
+        try:
+            dt = datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+        if now - dt <= window:
+            seen[url] = dt
+    return seen
+
+
+def _save_seen_urls_state(path: Path, seen: dict[str, datetime]) -> None:
+    """Persist seen-URLs state to disk."""
+    data = {"urls": {url: dt.isoformat() for url, dt in seen.items()}}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
 def _get_interest_clusters_last_built_at(db_path: str):
     """Return last built time for interest clusters from interest_meta table.
 
@@ -210,18 +282,40 @@ def _run_pipeline_for_candidates(
     if not candidates:
         raise RuntimeError("No candidates provided to radar pipeline")
 
-    logger.info("[pipeline] embedding %d candidates", len(candidates))
+    # Load global seen-URL state (7-day window)
+    state_path = Path.cwd() / "state" / "seen_urls.json"
+    seen_urls = _load_seen_urls_state(state_path)
+    now = datetime.now(timezone.utc)
+
+    # Filter out candidates whose URLs were seen within the last 7 days
+    filtered: list[Candidate] = []
+    normalized_urls: list[str] = []
+    for c in candidates:
+        norm = _normalize_url(c.url)
+        if not norm:
+            continue
+        ts = seen_urls.get(norm)
+        if ts is not None and (now - ts).total_seconds() <= 7 * 24 * 3600:
+            continue
+        filtered.append(c)
+        normalized_urls.append(norm)
+
+    if not filtered:
+        logger.info("[pipeline] all candidates skipped as already seen in last 7 days")
+        return 0
+
+    logger.info("[pipeline] embedding %d candidates", len(filtered))
 
     # 2) embed and score - fetch fulltext once per URL, then build long summaries
     fulltexts: dict[str, str] = {}
-    for c in candidates:
+    for c in filtered:
         url = c.url
         if not url or url in fulltexts:
             continue
         fulltexts[url] = fetch_fulltext(url) or ""
 
     texts: list[str] = []
-    for c in candidates:
+    for c in filtered:
         fulltext = fulltexts.get(c.url, "")
         long_summary = _build_long_summary(fulltext)
         if not long_summary:
@@ -232,8 +326,8 @@ def _run_pipeline_for_candidates(
     embs = [embed_text(t, cfg.embedding) for t in texts]
 
     score_params = load_score_params_from_env()
-    logger.info("[pipeline] scoring %d candidates", len(candidates))
-    scored = score_candidates(candidates, embs, clusters, params=score_params)
+    logger.info("[pipeline] scoring %d candidates", len(filtered))
+    scored = score_candidates(filtered, embs, clusters, params=score_params)
 
     # 3) select with basic diversity + exploration
     def _int_env(name: str, default: int) -> int:

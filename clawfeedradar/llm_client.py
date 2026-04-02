@@ -47,8 +47,8 @@ def load_small_llm_config(
             pass
         return default
 
-    max_in = _int_env("CLAWFEEDRADAR_LLM_MAX_INPUT_CHARS", 6000)
-    max_out = _int_env("CLAWFEEDRADAR_LLM_MAX_OUTPUT_CHARS", 6000)
+    max_in = _int_env("CLAWFEEDRADAR_LLM_MAX_INPUT_CHARS", 12000)
+    max_out = _int_env("CLAWFEEDRADAR_LLM_MAX_OUTPUT_CHARS", 12000)
     sleep_ms = _int_env("CLAWFEEDRADAR_LLM_SLEEP_BETWEEN_MS", 500)
 
     # Language hints: env defaults, CLI overrides
@@ -161,43 +161,111 @@ def generate_preview_summary(fulltext: str, cfg: SmallLLMConfig) -> str:
     }
 
     return _post_chat(payload, cfg)
-
-
 def generate_bilingual_body(fulltext: str, cfg: SmallLLMConfig) -> str:
-    """Generate paragraph-level bilingual body.
+    """Generate paragraph-level bilingual body using chunked LLM calls.
 
-    For each paragraph of the original article, output:
-    - first the original paragraph
-    - then its translation into cfg.target_lang
+    - Split fulltext into paragraphs by blank lines.
+    - Group paragraphs by approximate character budget per call.
+    - For each group, call the LLM with a JSON payload containing
+      paragraph indexes and texts.
+    - Support partial results: any successfully translated paragraphs
+      are recorded; remaining ones are retried up to 3 attempts.
 
-    The result is a markdown body suitable for detailed reading.
+    The result is a markdown body with alternating original and
+    translated paragraphs.
     """
 
     if not fulltext:
         return ""
 
-    text = fulltext[: cfg.max_input_chars]
+    text = fulltext.replace("\r\n", "\n").replace("\r", "\n")
+    raw_paragraphs = [p.strip() for p in text.split("\n\n")]
+    paragraphs = [p for p in raw_paragraphs if p]
+    if not paragraphs:
+        return ""
+
+    indexed = list(enumerate(paragraphs))
+
+    def _group_by_chars(items, max_chars: int):
+        chunks = []
+        cur = []
+        total = 0
+        for idx, para in items:
+            plen = len(para)
+            if plen > max_chars:
+                if cur:
+                    chunks.append(cur)
+                    cur = []
+                    total = 0
+                chunks.append([(idx, para)])
+                continue
+            if cur and total + plen + 2 > max_chars:
+                chunks.append(cur)
+                cur = []
+                total = 0
+            cur.append((idx, para))
+            total += plen + 2
+        if cur:
+            chunks.append(cur)
+        return chunks
+
+    pending = {idx for idx, _ in indexed}
+    translations: dict[int, str] = {}
+    max_attempts = 3
+    attempt = 0
+
     src = cfg.source_lang or "auto"
     tgt = cfg.target_lang
 
-    sys_prompt = (
-        "You are a careful bilingual translator. "
-        "Given an article, split it into paragraphs. For each paragraph, "
-        "first output the original text, then on the next paragraph output "
-        "its translation into the target language. "
-        "Keep the original ordering. Use plain markdown paragraphs, no tables. "
-        f"Source language hint: {src}. Target language: {tgt}."
-    )
+    while pending and attempt < max_attempts:
+        attempt += 1
+        to_process = [(idx, paragraphs[idx]) for idx in sorted(pending)]
+        chunks = _group_by_chars(to_process, cfg.max_input_chars)
 
-    user_prompt = "Produce paragraph-level bilingual text for the following article:\n\n" + text
+        for chunk in chunks:
+            payload_obj = {
+                "source_lang": src,
+                "target_lang": tgt,
+                "paragraphs": [{"idx": idx, "text": para} for idx, para in chunk],
+            }
+            sys_prompt = (
+                "You are a careful bilingual translator. "
+                "You receive a JSON object with an array of paragraphs, each "
+                "with an 'idx' and 'text'. For each paragraph, produce a "
+                "translation into the target language and return a JSON array "
+                "of objects of the form {\"idx\": int, \"tgt\": str}. "
+                "Do not include any additional commentary."
+            )
+            user_content = json.dumps(payload_obj, ensure_ascii=False)
+            payload = {
+                "model": cfg.model,
+                "messages": [
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                "max_tokens": cfg.max_output_chars if cfg.max_output_chars > 0 else None,
+            }
 
-    payload = {
-        "model": cfg.model,
-        "messages": [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "max_tokens": cfg.max_output_chars // 2 if cfg.max_output_chars > 0 else None,
-    }
+            try:
+                raw = _post_chat(payload, cfg)
+                data = json.loads(raw)
+            except Exception:
+                continue
 
-    return _post_chat(payload, cfg)
+            if not isinstance(data, list):
+                continue
+
+            for item in data:
+                idx = item.get("idx")
+                tgt_text = item.get("tgt")
+                if isinstance(idx, int) and isinstance(tgt_text, str) and idx in pending:
+                    translations[idx] = tgt_text.strip()
+                    pending.remove(idx)
+
+    parts: list[str] = []
+    for idx, para in enumerate(paragraphs):
+        parts.append(para)
+        tgt_text = translations.get(idx)
+        if tgt_text:
+            parts.append(tgt_text)
+    return "\n\n".join(parts)

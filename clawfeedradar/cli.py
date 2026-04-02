@@ -20,7 +20,6 @@ from .config import load_project_env
 from pathlib import Path
 
 load_project_env()
-_setup_logging()
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -135,6 +134,7 @@ def _cmd_schedule(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _setup_logging()
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))

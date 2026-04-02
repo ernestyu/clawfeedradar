@@ -1,0 +1,64 @@
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Editor / IDE
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# virtual env
+.venv/
+venv/
+env/
+
+# build
+build/
+dist/
+*.egg-info/
+
+# pytest / cache
+.pytest_cache/
+.mypy_cache/
+
+# =========================
+# Node
+# =========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =========================
+# Env files (重要)
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+
+# =========================
+# Misc
+# =========================
+*.tmp
+*.bak
+*.cache

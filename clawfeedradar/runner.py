@@ -128,8 +128,26 @@ def _load_seen_urls_state(path: Path) -> dict[str, datetime]:
 
 
 def _save_seen_urls_state(path: Path, seen: dict[str, datetime]) -> None:
-    """Persist seen-URLs state to disk."""
-    data = {"urls": {url: dt.isoformat() for url, dt in seen.items()}}
+    """Persist seen-URLs state to disk.
+
+    Be defensive: if any value in `seen` is not a datetime, try to parse
+    it, otherwise skip it.
+    """
+    urls: dict[str, str] = {}
+    for url, dt in seen.items():
+        if not isinstance(url, str):
+            continue
+        if isinstance(dt, datetime):
+            urls[url] = dt.isoformat()
+        else:
+            try:
+                parsed = datetime.fromisoformat(str(dt))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                urls[url] = parsed.isoformat()
+            except Exception:
+                continue
+    data = {"urls": urls}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 

@@ -459,6 +459,11 @@ def _run_pipeline_for_candidates(
     _ensure_parent_dir(str(output_xml_path))
     output_xml_path.write_text(rss, encoding="utf-8")
 
+    # Update seen-URL state for processed candidates
+    for norm in normalized_urls:
+        seen_urls[norm] = now
+    _save_seen_urls_state(state_path, seen_urls)
+
     return 0
 
 

@@ -30,7 +30,7 @@ def fetch_fulltext(url: str, *, timeout: int = 300) -> str:
     cmd = f"{cmd_tpl} {shlex.quote(url)}"
 
     max_retries = 3
-    backoff_min = 5.0
+    backoff_min = 3.0
     backoff_max = 10.0
 
     last_exc = None

@@ -323,7 +323,7 @@ def _run_pipeline_for_candidates(
             long_summary = f"{c.title}\n\n{c.summary}"
         texts.append(long_summary)
 
-    embs = [embed_text(t, cfg.embedding) for t in texts]
+    embs = embed_texts(texts, cfg.embedding)
 
     score_params = load_score_params_from_env()
     logger.info("[pipeline] scoring %d candidates", len(filtered))

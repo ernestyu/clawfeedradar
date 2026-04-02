@@ -315,6 +315,7 @@ def _run_pipeline_for_candidates(
         fulltexts[url] = fetch_fulltext(url) or ""
 
     texts: list[str] = []
+    long_summaries: dict[str, str] = {}
     for c in filtered:
         fulltext = fulltexts.get(c.url, "")
         long_summary = _build_long_summary(fulltext)
@@ -322,6 +323,7 @@ def _run_pipeline_for_candidates(
             # Fallback: use title + summary if fulltext is unavailable
             long_summary = f"{c.title}\n\n{c.summary}"
         texts.append(long_summary)
+        long_summaries[c.url] = long_summary
 
     embs = embed_texts(texts, cfg.embedding)
 
@@ -360,7 +362,7 @@ def _run_pipeline_for_candidates(
         int(max_items if max_items > 0 else 12),
     )
 
-    # 4) optional: fetch fulltext + LLM summaries (serial, best-effort)
+    # 4) optional: LLM summaries (serial, best-effort)
     llm_cfg = load_small_llm_config(source_lang_override=source_lang, target_lang_override=target_lang)
     enriched: list[dict] = []
     for item in selected:
@@ -374,7 +376,11 @@ def _run_pipeline_for_candidates(
         body_bilingual = ""
         if fulltext and llm_cfg is not None:
             try:
-                summary_preview = generate_preview_summary(fulltext, llm_cfg)
+                long_summary = long_summaries.get(c.url, "")
+                if long_summary:
+                    summary_preview = generate_preview_summary(long_summary, llm_cfg)
+                else:
+                    summary_preview = generate_preview_summary(fulltext, llm_cfg)
                 body_bilingual = generate_bilingual_body(fulltext, llm_cfg)
             except Exception:
                 summary_preview = ""

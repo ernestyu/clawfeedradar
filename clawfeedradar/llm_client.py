@@ -3,7 +3,7 @@ from __future__ import annotations
 
 """Small LLM client for bilingual summaries/translation.
 
-v0: OpenAI-compatible chat endpoint, driven by SMALL_LLM_* env vars.
+OpenAI-compatible chat endpoint, driven by SMALL_LLM_* env vars.
 If config is incomplete, the caller should treat summarization as disabled.
 """
 
@@ -47,6 +47,7 @@ def load_small_llm_config(
             pass
         return default
 
+    # Default to 12000-character windows; callers may override via env.
     max_in = _int_env("CLAWFEEDRADAR_LLM_MAX_INPUT_CHARS", 12000)
     max_out = _int_env("CLAWFEEDRADAR_LLM_MAX_OUTPUT_CHARS", 12000)
     sleep_ms = _int_env("CLAWFEEDRADAR_LLM_SLEEP_BETWEEN_MS", 500)
@@ -125,29 +126,30 @@ def _post_chat(payload: dict, cfg: SmallLLMConfig) -> str:
     return content
 
 
-def generate_preview_summary(fulltext: str, cfg: SmallLLMConfig) -> str:
-    """Generate a *single-language* preview summary in cfg.target_lang.
+def generate_preview_summary(long_summary: str, cfg: SmallLLMConfig) -> str:
+    """Generate a single-language preview summary from a long summary.
 
-    Intended for RSS <description> and quick scanning.
+    用于 RSS <description> 的短摘要，输入为已经构造好的
+    长摘要（约 1200 字 + 最后一段），而不是全文。
     """
 
-    if not fulltext:
+    if not long_summary:
         return ""
 
-    text = fulltext[: cfg.max_input_chars]
-
+    text = long_summary[: cfg.max_input_chars]
     src = cfg.source_lang or "auto"
     tgt = cfg.target_lang
 
     sys_prompt = (
         "You are a concise summarization assistant. "
-        "Given an article, produce a short summary ONLY in the target language. "
-        "Do not include any other language. "
+        "Given an article summary, produce a short summary ONLY in the "
+        "target language (no other languages). "
+        "Keep it around 400-600 characters. "
         f"Source language hint: {src}. Target language: {tgt}."
     )
 
     user_prompt = (
-        "Summarize the following article. "
+        "Summarize the following long summary. "
         "Write ONLY in the target language, in at most a few short paragraphs.\n\n" + text
     )
 
@@ -161,6 +163,8 @@ def generate_preview_summary(fulltext: str, cfg: SmallLLMConfig) -> str:
     }
 
     return _post_chat(payload, cfg)
+
+
 def generate_bilingual_body(fulltext: str, cfg: SmallLLMConfig) -> str:
     """Generate paragraph-level bilingual body using chunked LLM calls.
 
@@ -262,7 +266,7 @@ def generate_bilingual_body(fulltext: str, cfg: SmallLLMConfig) -> str:
                     translations[idx] = tgt_text.strip()
                     pending.remove(idx)
 
-    parts: list[str] = []
+    parts: List[str] = []
     for idx, para in enumerate(paragraphs):
         parts.append(para)
         tgt_text = translations.get(idx)

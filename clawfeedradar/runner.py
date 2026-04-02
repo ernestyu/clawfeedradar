@@ -365,7 +365,11 @@ def _run_pipeline_for_candidates(
     enriched: list[dict] = []
     for item in selected:
         c = item.candidate
-        fulltext = fetch_fulltext(c.url) or ""
+        # Reuse fulltext fetched earlier in this pipeline when embedding,
+        # fall back to a fresh fetch only if missing.
+        fulltext = fulltexts.get(c.url, "")
+        if not fulltext:
+            fulltext = fetch_fulltext(c.url) or ""
         summary_preview = ""
         body_bilingual = ""
         if fulltext and llm_cfg is not None:

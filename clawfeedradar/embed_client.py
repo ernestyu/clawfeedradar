@@ -54,11 +54,14 @@ def embed_text(text: str, cfg: EmbeddingConfig, *, timeout: int = 60) -> List[fl
     if max_retries < 1:
         max_retries = 1
     backoff = float(os.environ.get("CLAWFEEDRADAR_EMBED_RETRY_BACKOFF_SEC", "1.0") or "1.0")
+    sleep_after_ms = int(os.environ.get("CLAWFEEDRADAR_EMBED_SLEEP_BETWEEN_MS", "0") or "0")
 
     last_exc = None
     for attempt in range(1, max_retries + 1):
         try:
             resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+            if sleep_after_ms > 0:
+                time.sleep(sleep_after_ms / 1000.0)
             break
         except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException) as e:
             last_exc = e

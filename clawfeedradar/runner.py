@@ -431,15 +431,23 @@ def _run_pipeline_for_candidates(
         summary_preview = ""
         body_bilingual = ""
         if fulltext and llm_cfg is not None:
+            long_summary = long_summaries.get(c.url, "")
+            # 先生成预览摘要
             try:
-                long_summary = long_summaries.get(c.url, "")
-                if long_summary:
-                    summary_preview = generate_preview_summary(long_summary, llm_cfg)
-                else:
-                    summary_preview = generate_preview_summary(fulltext, llm_cfg)
-                body_bilingual = generate_bilingual_body(fulltext, llm_cfg)
-            except Exception:
+                src_for_preview = long_summary or fulltext
+                summary_preview = generate_preview_summary(src_for_preview, llm_cfg)
+            except Exception as e:
+                logger.warning(
+                    "[llm] preview summary failed for URL %s: %s", c.url, e
+                )
                 summary_preview = ""
+            # 再生成中英对照正文
+            try:
+                body_bilingual = generate_bilingual_body(fulltext, llm_cfg)
+            except Exception as e:
+                logger.warning(
+                    "[llm] bilingual body failed for URL %s: %s", c.url, e
+                )
                 body_bilingual = ""
 
         enriched.append(

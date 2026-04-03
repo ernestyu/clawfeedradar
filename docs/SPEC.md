@@ -343,8 +343,11 @@ def embed_candidate(candidate: Candidate) -> list[float]:
    recency = f(published_at)           # 例如最近 24h/7d 内权重较高
    pop     = candidate.popularity_score
 
+   # 边缘度：近二网络却不被一个群极端“碎压”
+   border = sim_second * (1.0 - sim_best)
+
    interest_score = a1 * sim_best
-                  + a2 * sim_second
+                  + a2 * border
                   + a3 * recency
                   + a4 * pop
    ```

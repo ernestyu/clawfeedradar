@@ -221,3 +221,17 @@
 - `docs/design.md`：详细设计文档；
 - `docs/sources.md`：各数据源适配器说明；
 - `docs/deployment.md`：如何在本地/服务器上部署 & 配置 RSS 输出。
+
+### CLI 概览（v0 实现）
+
+当前实现的两个子命令：
+
+- `clawfeedradar run`：针对单个源 URL（例如 HN frontpage）拉取候选、打分并生成一对 XML+JSON：
+
+```bash
+clawfeedradar run \n  --root /path/to/knowledge_data \n  --url https://hnrss.org/frontpage \n  --output ./feeds/hn-frontpage.xml \n  --score-threshold 0.4 \n  --max-items 5
+```
+
+- `clawfeedradar schedule`：读取 `sources.json`（由你维护的源配置文件），按各源的 `interval_hours` 定期跑 radar，输出每源各自的 XML/JSON。
+
+`max-items` 遵循 `CLI > 环境变量 (CLAWFEEDRADAR_MAX_ITEMS) > 默认 12` 的优先级。

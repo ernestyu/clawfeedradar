@@ -378,10 +378,10 @@ def _run_pipeline_for_candidates(
             }
         )
 
-    # 5) write JSON sidecar
+    # 5) write JSON sidecar (same basename as XML, .json extension)
     output_xml_path = Path(output_xml)
     output_dir = output_xml_path.parent
-    output_json_path = output_dir / "radar.json"
+    output_json_path = output_xml_path.with_suffix(".json")
 
     payload = []
     for row in enriched:
@@ -423,8 +423,15 @@ def _run_pipeline_for_candidates(
         item = row["item"]
         title = escape(c.title or "")
         link = escape(c.url or "")
-        # Prefer LLM preview summary if available; fall back to original summary
-        desc_raw = row["summary_preview"] or c.summary or ""
+        # Combine preview summary and bilingual body for RSS description when available
+        preview = row["summary_preview"] or c.summary or ""
+        body = row["body_bilingual"] or ""
+        if preview and body:
+            desc_raw = preview + "\n\n" + body
+        elif body:
+            desc_raw = body
+        else:
+            desc_raw = preview
         desc = escape(desc_raw)
         pub_date = c.published_at.strftime("%a, %d %b %Y %H:%M:%S %z")
         items_xml.append(

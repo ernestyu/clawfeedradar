@@ -292,11 +292,22 @@ def _run_pipeline_for_candidates(
         urls_to_fetch.append(url)
 
     if urls_to_fetch:
+        # 统计本轮抓取涉及多少个 host，用于审计并发行为（同一 host 内仍然串行）。
+        from collections import Counter as _Counter
+        host_counter = _Counter(urlparse(u).netloc for u in urls_to_fetch)
+        distinct_hosts = len(host_counter)
         logger.info(
-            "[pipeline] fetching fulltext for %d unique URLs with up to %d workers",
+            "[pipeline] fulltext fetch: urls=%d, hosts=%d, max_workers=%d",
             len(urls_to_fetch),
+            distinct_hosts,
             max_workers,
         )
+        if distinct_hosts == 1:
+            only_host = next(iter(host_counter.keys()))
+            logger.info(
+                "[pipeline] single host %%r detected; requests to this host are serialized via host-level locks",
+                only_host,
+            )
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = {ex.submit(_fetch_for_url, u): u for u in urls_to_fetch}
             for fut in as_completed(futures):

@@ -1,304 +1,209 @@
 # clawfeedradar
 
-个人「读报雷达」：围绕 `clawsqlite` 知识库，自动从多个信息源（Hacker News、RSS、arXiv 等）中挑选**你可能感兴趣**的文章，生成一个专属 RSS feed（支持中英对照摘要），让你在常用 RSS 阅读器里看到真正贴合自己兴趣的技术流和论文流。
+个人「读报雷达」：围绕 `clawsqlite` 知识库，从 Hacker News / RSS / arXiv 等信息源中筛选**你可能感兴趣**的文章，自动生成带中英对照摘要的专属 RSS feed。
 
-> 项目还在设计阶段，这个 README 先作为愿景 + 高层设计草稿，后续实现过程中会细化。
-
----
-
-## 1. Overall 思路
-
-把系统拆成两层：
-
-- **核心引擎：clawsqlite**
-  - 负责存你的知识库（articles + 摘要向量 + 标签向量）。
-  - 新增「兴趣簇 + 候选打分」这两类能力：
-    - 定期对整个库做聚类，得到一组代表你长期兴趣方向的 **interest clusters**；
-    - 给一批「外部候选文章」（HN / RSS / arXiv）打“兴趣分”，看它们落在哪些簇里。
-
-- **外部应用：clawfeedradar（本仓库）**
-  - 负责和各种信息源打交道：抓 Hacker News / RSS / arXiv；
-  - 把这些候选文章喂给 `clawsqlite` 做兴趣打分；
-  - 对分数够高的文章做中/英摘要，生成一个可以被 RSS 阅读器订阅的 `*.xml` feed；
-  - 将 feed 推送到一个稳定的 URL（GitHub Pages 或你的自托管站点）。
-
-一句话：**clawsqlite 负责“知道你喜欢什么”，clawfeedradar 负责“去外面帮你找类似的东西，并打包成可阅读的 feed”。**
+> 设计目标：简单可控、行为可审计、和 `clawsqlite` 解耦。当前文档描述的是 v0 实现，后续在保持接口稳定的前提下演进。
 
 ---
 
-## 2. 角色分工
+## 简介
 
-### 2.1 clawsqlite 侧（不在本仓库实现）
+clawfeedradar 的核心工作是三件事：
 
-在 `clawsqlite` 仓库中，我们计划新增：
+1. **从外部源抓候选文章**  
+   支持 HN RSS、普通 RSS，后续可扩展 arXiv 等。
+2. **利用 clawsqlite 的兴趣簇做打分排序**  
+   通过 Embedding + 兴趣簇，算出每篇候选文章和「你的长期兴趣」的匹配度，并结合时间和热度打一个综合分。
+3. **生成带中英对照摘要的 RSS feed**  
+   对选中的文章抓全文，调用小 LLM 生成中英对照正文，并写出一对 XML（给 RSS Reader）+ JSON（调试/二次开发）。
 
-1. 两个 `knowledge` 子命令：
-   - `clawsqlite knowledge build-interest-clusters`：
-     - 定期（例如每天）对知识库里的文章做聚类；
-     - 构建出代表你长期兴趣的若干 **兴趣簇**；
-     - 将簇中心与成员关系持久化到 DB 里（新增两张可选表）。
-
-   - `clawsqlite knowledge score-candidates`：
-     - 接收一批来自外部的信息源的候选文章（JSON 输入）；
-     - 对每条候选，基于兴趣簇做打分：
-       - 落在哪个簇？
-       - 与该簇的相似度是多少？
-     - 返回一个带 `interest_score` 和簇信息的 JSON 输出，供上层应用决定是否推荐。
-
-2. 新增两张可选表（仅在显式调用 `build-interest-clusters` 时创建）：
-
-   - `interest_clusters`
-     - 存储每个簇的中心向量、规模和自动生成的标签（label）。
-   - `interest_cluster_members`（可选）
-     - 记录簇内包含哪些文章、成员权重等，用于调试和可视化。
-
-> 这些 schema 变更都是「向后兼容 + 按需启用」的：
-> - 不调用新的命令，就不会创建新表；
-> - 不影响传统的 `ingest` / `search` / `reindex` 等行为。
-
-### 2.2 clawfeedradar 侧（本仓库实现）
-
-本项目不关心具体的 DB 细节，只把 `clawsqlite` 当成一个“兴趣打分服务”。
-
-职责包括：
-
-1. **数据源适配（Source Adapters）**
-   - `Hacker News`：
-     - 通过官方 API 拉取 `topstories` / `newstories`；
-   - `RSS`：
-     - 从任意外部 RSS feed 拉取新条目；
-   - `arXiv` / 其它：
-     - 后续可以按需扩展。
-
-   所有数据源最终汇总为统一的「候选文章 JSON 格式」，与具体源解耦，形如：
-
-   ```jsonc
-   {
-     "id": "hn-123456",                 // 源内唯一 ID（hn-123456 / arxiv-xyz / rss-abc）
-     "url": "https://example.com/post",
-     "title": "Efficient vector search with SQLite",
-     "summary": "短摘要或抓取到的正文片段",
-     "tags": "hn,sqlite,vector,search",
-     "source": "hackernews",            // hackernews | arxiv | rss | ...
-     "published_at": "2026-03-28T07:00:00Z",
-
-     // 各数据源自行归一化后的“热度/重要性”得分，统一映射到 0..1
-     "popularity_score": 0.82,
-
-     // 源特定的原始字段，仅供源专属通道使用；主打分逻辑不会依赖这些字段
-     "source_meta": {
-       "hn_points": 350,
-       "hn_comments": 80,
-       "rss_feed": "https://example.com/feed.xml"
-     }
-   }
-   ```
-
-2. **调度 & 打分（Scheduler + Scoring）**
-
-   典型的周期性流程：
-
-   - 每天一次（或更频繁）：
-
-     ```bash
-     clawsqlite knowledge build-interest-clusters --root /path/to/knowledge_data
-     ```
-
-     让 `clawsqlite` 重新用整个知识库构建兴趣簇，反映你最近的阅读/收藏变化。
-
-   - 每 8 小时一次：
-
-     ```bash
-     clawfeedradar run \
-       --root /path/to/knowledge_data \
-       --sources hn,arxiv,rss \
-       --score-threshold 0.9 \
-       --output ./feeds/radar.xml
-     ```
-
-     内部步骤：
-
-     1. 从各个源（HN / RSS / arXiv）拉候选文章，统一转成上面的 Candidate 结构；
-     2. 对每条候选，调用 `clawsqlite knowledge score-candidates` 获取 **通用兴趣分**（interest_score），该分数只依赖：
-        - 文章向量与兴趣簇的相似度（最近簇 / 次近簇等）；
-        - 簇内文章的 usage（view_count / last_viewed_at）；
-        - 文章发布时间（recency）；
-        - `popularity_score`（已归一化的通用热度）。
-     3. 针对少数头部源（例如 `hackernews`、`arxiv`），通过可选的 **源特化通道** 做一点增量打分：
-
-        ```python
-        base = interest_score  # 通用主通道
-        extra = SOURCE_SCORERS.get(candidate.source, score_generic_extra)(candidate, base)
-        final_score = base + LAMBDA_SOURCE.get(candidate.source, LAMBDA_SOURCE["default"]) * extra
-        ```
-
-        - `score_hn_extra` 等函数只看 `candidate.source_meta` / `popularity_score` 这类源特定字段；
-        - 主通道逻辑不依赖任何 HN/arXiv 特有字段，保持对所有源通用。
-
-     4. 在排序时加入 **多样性与探索** 策略：
-        - 主列表按 `final_score` 排序，但每个兴趣簇/主题最多取若干条，避免被单一簇垄断；
-        - 额外从“处于簇边界”或“全局高热度但相似度一般”的候选中抽取 1–2 条作为探索项，保证视野不过度收窄。
-
-     5. 对选中的条目，用小型 LLM（或你配置的翻译服务）生成中英摘要，并渲染成一个 RSS feed (`*.xml`) 文件。
-
-3. **输出：生成专属 RSS feed**
-
-   - `clawfeedradar` 生成的 RSS 文件可以：
-     - 推送到 GitHub Pages 对应的仓库（例如 `ernestyu/clawfeedradar-feed`）；
-     - 或者同步到你的自托管站点（nginx / Python http.server 等）。
-   - 你的 RSS 阅读器只需要订阅一个 URL（例如：
-
-     ```
-     https://<your-user>.github.io/clawfeedradar-feed/hn-radar-<token>.xml
-     ```
-
-     ）就能看到：
-
-     - 标题（英文 + 中文简译）；
-     - 中英对照摘要；
-     - 原文链接；
-     - 可选的「这篇文章最接近你知识库里的哪些文章/兴趣簇」等解释信息。
+一句话：**clawsqlite 负责“知道你喜欢什么”，clawfeedradar 负责“去外面帮你找类似的东西，翻译好喂给你的 RSS 阅读器”。**
 
 ---
 
-## 3. 典型工作流示意
+## 快速开始
 
-假设你已经有一套 `clawsqlite-knowledge` 知识库，里面存着你这些年手工收集的文章/论文：
+### 1. 准备环境
 
-1. **每天凌晨**：
+假设你的目录结构类似：
 
-   ```bash
-   clawsqlite knowledge build-interest-clusters --root /home/node/.openclaw/workspace/knowledge_data
-   ```
-
-   - 从 DB 把文章向量全部拉出来；
-   - 聚类形成若干兴趣簇（如「LLM/Agents」「SQLite/向量检索」「量化/风控」等）；
-   - 将簇中心和成员写入 `interest_clusters` 表。
-
-2. **每 8 小时一次**：
-
-   ```bash
-   clawfeedradar run \
-     --root /home/node/.openclaw/workspace/knowledge_data \
-     --sources hn \
-     --score-threshold 0.9 \
-     --output ./feeds/hn-radar.xml
-   ```
-
-   clawfeedradar 会：
-
-   - 调 HN API 拿最新一批 stories；
-   - 对每条 story 抓正文/生成摘要，整理成 candidates；
-   - 把 candidates 喂给 `clawsqlite knowledge score-candidates`，拿到兴趣分和对应簇；
-   - 只保留“分数明显高”的文章；
-   - 用 LLM 生成中英摘要；
-   - 写出 `hn-radar.xml` RSS 文件，并（通过 git 或其它方式）同步到公开可访问的 URL。
-
-3. **你这边的体验**：
-
-   - 打开你熟悉的 RSS 阅读器，订阅一次该 URL；
-   - 每天看到的是一条「已经按你个人兴趣过滤和排序过」的 HN/论文/博客流；
-   - 觉得某篇值得永久收藏，就再用 `clawsqlite-knowledge` / `clawsqlite knowledge ingest` 把它写回知识库，反过来继续丰富兴趣簇。
-
----
-
-## 4. 状态说明
-
-当前仓库处于 **设计起步阶段**：
-
-- ✅ 仓库创建 & 命名：`clawfeedradar`
-- ✅ 确认与 `clawsqlite` 的边界：
-  - clawsqlite 提供聚类 + 候选打分的 CLI；
-  - clawfeedradar 做数据源适配、调度、feed 生成。
-- 🔜 下一步计划：
-  1. 明确 `score-candidates` CLI 的 JSON schema（输入/输出字段）；
-  2. 设计 `clawfeedradar` 的命令行接口（如 `run` 子命令、配置文件结构）；
-  3. 选定最小可用数据源（优先 Hacker News），实现 HN→RSS 的 MVP。
-
-后续随着实现推进，这个 README 会拆成：
-
-- 高层说明（本文件保留简洁版）；
-- `docs/design.md`：详细设计文档；
-- `docs/sources.md`：各数据源适配器说明；
-- `docs/deployment.md`：如何在本地/服务器上部署 & 配置 RSS 输出。
-
-### CLI 概览（v0 实现）
-
-当前实现的两个子命令：
-
-- `clawfeedradar run`：针对单个源 URL（例如 HN frontpage）拉取候选、打分并生成一对 XML+JSON：
-
-```bash
-clawfeedradar run \n  --root /path/to/knowledge_data \n  --url https://hnrss.org/frontpage \n  --output ./feeds/hn-frontpage.xml \n  --score-threshold 0.4 \n  --max-items 5
+```text
+~/.openclaw/workspace/
+  ├── clawsqlite          # clawsqlite 仓库（已有）
+  ├── knowledge_data      # 你的 clawsqlite-knowledge 知识库
+  ├── clawfeedradar       # 本仓库
+  └── clawfetch / ...     # 抓全文用的 clawfetch + wrapper
 ```
 
-- `clawfeedradar schedule`：读取 `sources.json`（由你维护的源配置文件），按各源的 `interval_hours` 定期跑 radar，输出每源各自的 XML/JSON。
+先确保 clawsqlite 这边已经有一个知识库（articles + 向量 + 兴趣簇）：
 
-`max-items` 遵循 `CLI > 环境变量 (CLAWFEEDRADAR_MAX_ITEMS) > 默认 12` 的优先级。
+```bash
+cd ~/.openclaw/workspace/clawsqlite
+clawsqlite knowledge build-interest-clusters   --root ~/.openclaw/workspace/knowledge_data
+```
 
+### 2. 配置 clawfeedradar
 
-## 使用指南（v0）
+在 `clawfeedradar` 目录下：
 
-### 1. 环境变量配置
+```bash
+cd ~/.openclaw/workspace/clawfeedradar
+cp ENV.example .env
+# 打开 .env 按你的环境改一遍
+```
 
-复制 `ENV.example` 为 `.env`，按你的机器修改：
+最小可工作配置（核心几类）：
 
-- clawsqlite 知识库：
+- clawsqlite 知识库
   - `CLAWSQLITE_ROOT` 指向 `knowledge_data` 根目录
-  - `CLAWSQLITE_DB` 如需要可显式覆盖
-- Embedding 服务（和 clawsqlite 共用）：
+  - `CLAWSQLITE_DB` 如有需要显式覆盖 sqlite 路径
+- Embedding 服务（与 clawsqlite 共用）
   - `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` / `EMBEDDING_API_KEY`
-  - `CLAWSQLITE_VEC_DIM` 必须和 embedding 模型维度一致
-- clawfeedradar 输出：
-  - `CLAWFEEDRADAR_OUTPUT_DIR`：XML/JSON 输出目录
-- 小 LLM（摘要 + 中英对照）：
+  - `CLAWSQLITE_VEC_DIM` 必须与 embedding 模型维度一致
+- 输出目录
+  - `CLAWFEEDRADAR_OUTPUT_DIR`：生成的 XML/JSON 放在哪个目录
+- 小 LLM（摘要 + 中英对照）
   - `SMALL_LLM_BASE_URL` / `SMALL_LLM_MODEL` / `SMALL_LLM_API_KEY`
-  - `CLAWFEEDRADAR_LLM_MAX_OUTPUT_CHARS`：单次调用输出预算（字符级）
-  - `CLAWFEEDRADAR_LLM_SLEEP_BETWEEN_MS`：两次调用间隔（毫秒）
+  - `CLAWFEEDRADAR_LLM_MAX_OUTPUT_CHARS`：单次调用的输出字符预算
+  - `CLAWFEEDRADAR_LLM_SLEEP_BETWEEN_MS`：两次调用之间的 sleep（毫秒）
   - `CLAWFEEDRADAR_LLM_SOURCE_LANG` / `CLAWFEEDRADAR_LLM_TARGET_LANG`
-  - `CLAWFEEDRADAR_LLM_MAX_PARAGRAPH_CHARS`：每个中英对照段的最大字符数（一屏），例如 2400
-- 抓全文：
-  - `CLAWFEEDRADAR_SCRAPE_CMD` 指向一个调用 clawfetch 的 wrapper
-  - `CLAWFEEDRADAR_SCRAPE_WORKERS` 控制抓取并发（默认 4）
-- 评分权重：
-  - `CLAWFEEDRADAR_W_SIM_BEST` / `W_SIM_SECOND` / `W_RECENCY` / `W_POPULARITY`
+  - `CLAWFEEDRADAR_LLM_MAX_PARAGRAPH_CHARS`：每个中英对照段的最大字符数（按屏拆分），例如 2400 ≈ 600 字
+- 抓全文
+  - `CLAWFEEDRADAR_SCRAPE_CMD`：一个接受 URL、输出 markdown 的命令，通常是调用 `clawfetch` 的 wrapper：
+    - 例如：`/home/node/.openclaw/workspace/clawfetch_wrapper.sh "$URL"`
+  - `CLAWFEEDRADAR_SCRAPE_WORKERS`：抓取并发 worker 数（同 host 内仍串行）
+- 打分权重
+  - `CLAWFEEDRADAR_W_SIM_BEST`
+  - `CLAWFEEDRADAR_W_SIM_SECOND`
+  - `CLAWFEEDRADAR_W_RECENCY`
+  - `CLAWFEEDRADAR_W_POPULARITY`
   - `CLAWFEEDRADAR_RECENCY_HALF_LIFE_DAYS`：recency 半衰期（天）
-- 默认条目数：
-  - `CLAWFEEDRADAR_MAX_ITEMS`：不写 `--max-items` 时的默认条数
+- 默认条目数
+  - `CLAWFEEDRADAR_MAX_ITEMS`：不写 `--max-items` 时，每轮最多选几条
 
-### 2. 单源调试：`clawfeedradar run`
-
-示例：只对 HN frontpage 跑一轮 radar：
+### 3. 跑一轮 HN 前页（单源调试）
 
 ```bash
-clawfeedradar run \n  --root /home/node/.openclaw/workspace/knowledge_data \
-  --url https://hnrss.org/frontpage \
-  --output ./feeds/hn-frontpage.xml \
-  --score-threshold 0.4 \
-  --max-items 5 \
-  --source-lang en \
-  --target-lang zh
+cd ~/.openclaw/workspace/clawfeedradar
+python -m clawfeedradar.cli run   --root ~/.openclaw/workspace/orgmode/clawsqlite/data   --url https://hnrss.org/frontpage   --output ./feeds/hn-frontpage.xml   --score-threshold 0.4   --max-items 5   --source-lang en   --target-lang zh
 ```
 
-行为：
+跑完后你会得到：
 
-- 从给定 URL 拉取候选（当前实现支持 HN RSS / 普通 RSS）
-- 对每条候选做 embedding、和兴趣簇计算 `sim_best` / `sim_second` 等
-- 按公式计算兴趣分：
-  - 主簇：`W_SIM_BEST * sim_best`
-  - 边缘补偿：`W_SIM_SECOND * (sim_second * (1 - sim_best))`
-  - 时间衰减：`W_RECENCY * recency`（按 `RECENCY_HALF_LIFE_DAYS` 计算）
-  - 热度：`W_POPULARITY * popularity_score`
-- 过滤掉 `interest_score < score_threshold` 的候选
-- 按 `final_score` 排序，取前 `max-items` 条
-- 对每条选中条目：
-  - 只抓一次全文（带重试 + backoff），构造长摘要+中文预览
-  - 用小 LLM 生成中英对照正文，按屏段切分（由 `LLM_MAX_PARAGRAPH_CHARS` 控制）
-- 输出：
-  - `./feeds/hn-frontpage.xml`：RSS feed，`<description>` 包含 preview + bilingual body
-  - `./feeds/hn-frontpage.json`：JSON sidecar，包含 fulltext / summary_preview / body_bilingual / 打分信息
+- `./feeds/hn-frontpage.xml`  
+  一个 RSS feed，适合直接在 RSS 阅读器里订阅；每条 `<description>` 包含：
+  - preview 短摘要（`summary_preview`）
+  - 全文中英对照正文（`body_bilingual`）
+- `./feeds/hn-frontpage.json`  
+  同名 JSON sidecar，包含：
+  - 原始 fulltext
+  - `summary_preview`
+  - `body_bilingual`
+  - 打分明细（interest_score / final_score / sim_best / sim_second / best_cluster_id 等）
 
-### 3. 多源调度：`clawfeedradar schedule`
+---
+
+## 配置
+
+### 1. 环境变量（.env）
+
+完整列表参见 `ENV.example`，这里只强调关键点：
+
+#### clawsqlite 相关
+
+```env
+CLAWSQLITE_ROOT=/home/node/.openclaw/workspace/orgmode/clawsqlite/data
+CLAWSQLITE_DB=/home/node/.openclaw/workspace/orgmode/clawsqlite/data/clawkb.sqlite3
+```
+
+#### Embedding 相关
+
+```env
+EMBEDDING_BASE_URL=https://embed.example.com/v1
+EMBEDDING_MODEL=your-embedding-model
+EMBEDDING_API_KEY=sk-your-embedding-key
+CLAWSQLITE_VEC_DIM=1024
+```
+
+#### clawfeedradar 输出与抓取
+
+```env
+CLAWFEEDRADAR_OUTPUT_DIR=/home/node/.openclaw/workspace/clawfeedradar/feeds
+CLAWFEEDRADAR_SCRAPE_CMD="/home/node/.openclaw/workspace/clawfetch_wrapper.sh"
+CLAWFEEDRADAR_SCRAPE_WORKERS=4
+# CLAWFEEDRADAR_HTTP_USER_AGENT=...
+```
+
+#### 打分权重
+
+```env
+CLAWFEEDRADAR_W_SIM_BEST=0.6
+CLAWFEEDRADAR_W_SIM_SECOND=0.2
+CLAWFEEDRADAR_W_RECENCY=0.1
+CLAWFEEDRADAR_W_POPULARITY=0.1
+CLAWFEEDRADAR_RECENCY_HALF_LIFE_DAYS=3
+```
+
+- `sim_best`：候选与最近兴趣簇的相似度；
+- `border = sim_second * (1 - sim_best)`：表示“在两个簇之间”的边缘程度；
+- `recency`：按半衰期计算的时间权重；
+- `popularity_score`：源侧归一化的热度；
+- 最终兴趣分：
+
+  ```text
+  interest = W_SIM_BEST   * sim_best
+           + W_SIM_SECOND * border
+           + W_RECENCY    * recency
+           + W_POPULARITY * popularity_score
+  ```
+
+#### 小 LLM 相关
+
+```env
+SMALL_LLM_BASE_URL=http://zl.moonsetz.com:18099/v1
+SMALL_LLM_MODEL=Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf
+SMALL_LLM_API_KEY=sk-...
+
+CLAWFEEDRADAR_LLM_MAX_OUTPUT_CHARS=6000
+CLAWFEEDRADAR_LLM_SLEEP_BETWEEN_MS=500
+CLAWFEEDRADAR_LLM_SOURCE_LANG=auto
+CLAWFEEDRADAR_LLM_TARGET_LANG=zh
+# 每个中英对照段的最大字符数（一屏）
+# CLAWFEEDRADAR_LLM_MAX_PARAGRAPH_CHARS=2400
+```
+
+#### 默认条目数
+
+```env
+# 不写 --max-items 时的默认值
+CLAWFEEDRADAR_MAX_ITEMS=5
+```
+
+---
+
+## 用法
+
+### 1. `clawfeedradar run` — 单源模式
+
+从单个源 URL 抓取候选，打分并输出一对 XML + JSON。
+
+```bash
+python -m clawfeedradar.cli run   --root /path/to/knowledge_data   --url https://hnrss.org/frontpage   --output ./feeds/hn-frontpage.xml   --score-threshold 0.4   --max-items 5   --source-lang en   --target-lang zh
+```
+
+参数说明：
+
+- `--root`：clawsqlite 知识库根目录（优先级：CLI > `CLAWSQLITE_ROOT`）。
+- `--url`：单个源 URL（HN RSS / 普通 RSS / 未来可扩展其它）。
+- `--output`：RSS XML 输出路径，默认 `$CLAWFEEDRADAR_OUTPUT_DIR/radar.xml`。
+- `--score-threshold`：最低 `interest_score` 门槛，低于该值的候选会被过滤。
+- `--max-items`：本轮最多保留多少条；优先级：CLI > `CLAWFEEDRADAR_MAX_ITEMS` > 默认 12。
+- `--source-lang` / `--target-lang`：传给小 LLM 的语言提示。
+- `--json`：额外在 stdout 打印选中条目的 JSON（调试用）。
+
+### 2. `clawfeedradar schedule` — 多源调度
+
+根据 `sources.json` 跑多个源，每个源各自产生 `{label}.xml` + `{label}.json`。
 
 `sources.json` 示例：
 
@@ -318,25 +223,129 @@ clawfeedradar run \n  --root /home/node/.openclaw/workspace/knowledge_data \
 ]
 ```
 
-命令：
+命令示例：
 
 ```bash
-clawfeedradar schedule \n  --root /home/node/.openclaw/workspace/knowledge_data \
-  --sources-json /home/node/.openclaw/workspace/clawfeedradar/sources.json \
-  --output-dir /home/node/.openclaw/workspace/clawfeedradar/feeds
+python -m clawfeedradar.cli schedule   --root /path/to/knowledge_data   --sources-json /path/to/sources.json   --output-dir /path/to/feeds
 ```
 
 行为：
 
 - 遍历 `sources.json` 的每个 entry：
-  - 根据 `interval_hours` + `last_success_at` 判定是否到点
-  - 若到点：调用与 `run` 相同的 pipeline
-  - 每个源输出 `{label}.xml` + `{label}.json` 到 `output-dir`
-  - 更新该 entry 的 `last_success_at` / `last_error`
+  - 若 `last_success_at` 为空或距离现在超过 `interval_hours` 小时，则判定为 due；
+  - 调同样的 pipeline（与 `run` 一致），最多选 `max_entries` 条；
+  - 输出 `{label}.xml` + `{label}.json` 到 `output-dir`；
+  - 更新该 entry 的 `last_success_at` / `last_error`。
 
-### 4. English quick summary
+约定：
 
-- Configure env via `.env` (see `ENV.example`) for: knowledge root, embedding, LLM, scraping, scoring weights.
-- Use `clawfeedradar run` to debug a single source URL and produce one XML/JSON pair.
-- Use `clawfeedradar schedule` with a `sources.json` file to run multiple sources periodically, each producing `{label}.xml` + `{label}.json`.
-- RSS `<description>` now includes both the preview summary and the full bilingual body for each selected item.
+- `score_threshold` 只在 `sources.json` 中配置，不在 .env 里重复；
+- `max_entries` 是 schedule 专用的 per-source 上限，不和 `CLAWFEEDRADAR_MAX_ITEMS` 混用。
+
+---
+
+## 行为细节
+
+这一节用于描述实现上的关键行为，方便你审计和调参。
+
+### 1. 抓全文并发模型
+
+- 默认使用 `CLAWFEEDRADAR_SCRAPE_WORKERS` 个线程（例如 4）。
+- **按 host 串行、跨 host 并行**：
+  - 每个 host 有一把锁，同一 host 的 URL 会在 `with lock:` 下逐一抓取；
+  - 不同 host 之间可以并发运行，最多 `SCRAPE_WORKERS` 个并行抓取。
+- 日志会写出本轮抓取的 host 分布：
+
+  ```text
+  [pipeline] fulltext fetch: urls=100, hosts=1, max_workers=4
+  [pipeline] single host 'arxiv.org' detected; requests to this host are serialized via host-level locks
+  ```
+
+  便于你确认像 arxiv 这种是不是“老老实实串行抓”。
+
+### 2. 打分与选条
+
+- 对每个候选：
+  - 用 embedding 服务生成向量；
+  - 与兴趣簇计算 `sim_best` / `sim_second`；
+  - 计算边缘度：`border = sim_second * (1 - sim_best)`；
+  - 计算 `recency`（按 `RECENCY_HALF_LIFE_DAYS` 做指数衰减）；
+  - 取源适配器提供的 `popularity_score`（0..1）。
+- 最终兴趣分：
+
+  ```text
+  interest = W_SIM_BEST   * sim_best
+           + W_SIM_SECOND * border
+           + W_RECENCY    * recency
+           + W_POPULARITY * popularity_score
+  ```
+
+- 选条逻辑：
+  - 先对所有候选算分，得到 `scored` 列表；
+  - 过滤：`interest_score >= score_threshold`；
+  - 按 `final_score` 排序；
+  - 取前 `max_items` 条作为 `selected`；
+  - 只对 `selected` 调 LLM；
+  - 日志记录：
+
+    ```text
+    [pipeline] scored=20, passed_threshold=15, max_items=5, selected=5 (score_threshold=0.400)
+    ```
+
+### 3. LLM 行为
+
+- 预览摘要：
+  - 输入为构造好的长摘要（约 1200 字 + 最后一段），不再额外截断；
+  - 输出为目标语言的短摘要，用于 RSS `<description>` 的开头部分。
+- 中英对照正文：
+  - 以全文为输入；
+  - 先按空行切自然段，再按 `CLAWFEEDRADAR_LLM_MAX_PARAGRAPH_CHARS` 把过长段落按句号等切成“屏段”；
+  - 对每篇文章的所有屏段，按字符预算分成若干批请求 LLM；
+  - 支持部分成功 + 最多 3 轮重试；
+  - 输出为“原文屏段 + 译文屏段”交替的 markdown 文本。
+
+### 4. XML / JSON 输出约定
+
+- `run`：
+  - `--output /path/to/foo.xml` → JSON sidecar 在 `/path/to/foo.json`；
+- `schedule`：
+  - 源的 `label` 为 `bar` → 输出 `bar.xml` + `bar.json`；
+- JSON 中字段：
+  - `fulltext` / `summary_preview` / `body_bilingual`；
+  - 各种打分明细；
+- XML 中 `<item><description>`：
+
+  ```text
+  description = summary_preview + "
+
+" + body_bilingual
+  ```
+
+  若某一项不存在，则退回到剩下的那一项。
+
+---
+
+## 设计
+
+更细节的架构、打分公式推导、与 clawsqlite 的边界设计，见：
+
+- `docs/DESIGN.md`
+- `docs/SPEC.md`
+
+当前实现与 SPEC 中的 v0 设计保持一致：
+
+- clawfeedradar 不调用 clawsqlite 的内部 Python API，只通过已定义的 DB schema + embedding/LLM 服务接口工作；
+- 打分主通道是源无关的兴趣空间，源特化逻辑仅通过 `popularity_score` 和少量 `source_meta` 参与（当前 v0 只用了通用热度）；
+- 选条逻辑采用简单 top-N，避免 early-stage 过度复杂的 explore slot；多样性主要由 `W_SIM_SECOND * border` 提供。
+
+---
+
+## TODO
+
+- [ ] 更丰富的数据源适配器：直接支持 HN API / arxiv API 等，不只靠 RSS。
+- [ ] 更细粒度的打分分析输出（例如 per-cluster 贡献）。
+- [ ] 为 feed 输出增加「解释字段」（为什么推荐这条）。
+- [ ] 拆分中英文 README：
+  - `README_zh.md`：中文完整说明；
+  - `README.md`：英文简版 + 链接到中文说明。
+- [ ] 根据实际使用反馈调整 scoring / LLM / 抓取策略，整理成稳定的 v1 规格。

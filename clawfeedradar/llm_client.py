@@ -21,7 +21,6 @@ class SmallLLMConfig:
     base_url: str
     model: str
     api_key: str
-    max_input_chars: int
     max_output_chars: int
     sleep_between_ms: int
     source_lang: str  # e.g. "auto", "en"
@@ -47,8 +46,6 @@ def load_small_llm_config(
             pass
         return default
 
-    # Default to 12000-character windows; callers may override via env.
-    max_in = _int_env("CLAWFEEDRADAR_LLM_MAX_INPUT_CHARS", 12000)
     max_out = _int_env("CLAWFEEDRADAR_LLM_MAX_OUTPUT_CHARS", 12000)
     sleep_ms = _int_env("CLAWFEEDRADAR_LLM_SLEEP_BETWEEN_MS", 500)
 
@@ -70,7 +67,6 @@ def load_small_llm_config(
         base_url=base_url,
         model=model,
         api_key=api_key,
-        max_input_chars=max_in,
         max_output_chars=max_out,
         sleep_between_ms=sleep_ms,
         source_lang=src_lang,
@@ -136,7 +132,7 @@ def generate_preview_summary(long_summary: str, cfg: SmallLLMConfig) -> str:
     if not long_summary:
         return ""
 
-    text = long_summary[: cfg.max_input_chars]
+    text = long_summary
     src = cfg.source_lang or "auto"
     tgt = cfg.target_lang
 
@@ -188,7 +184,55 @@ def generate_bilingual_body(fulltext: str, cfg: SmallLLMConfig) -> str:
     if not paragraphs:
         return ""
 
-    indexed = list(enumerate(paragraphs))
+    # Optional: limit each displayed bilingual segment to a screen-sized chunk.
+    # This keeps each original+translation pair within a readable size.
+    try:
+        max_seg_chars = int(os.environ.get("CLAWFEEDRADAR_LLM_MAX_PARAGRAPH_CHARS", "0") or "0")
+    except Exception:
+        max_seg_chars = 0
+    if max_seg_chars <= 0:
+        max_seg_chars = None
+
+    def _split_paragraph_by_screen(para: str):
+        """Split a long paragraph into screen-sized segments using sentence boundaries.
+
+        If max_seg_chars is None, the paragraph is returned as-is.
+        """
+        if max_seg_chars is None or len(para) <= max_seg_chars:
+            return [para]
+        # naive sentence split by common terminators
+        import re as _re
+        sentences = []
+        start = 0
+        for m in _re.finditer(r"[^。！？!?；;]+[。！？!?；;]?", para):
+            seg = m.group(0)
+            if seg:
+                sentences.append(seg)
+        if not sentences:
+            return [para]
+        segments = []
+        cur = ""
+        for s in sentences:
+            if not cur:
+                cur = s
+            elif len(cur) + len(s) <= max_seg_chars:
+                cur += s
+            else:
+                segments.append(cur)
+                cur = s
+        if cur:
+            segments.append(cur)
+        return segments
+
+    # Build screen-sized segments from paragraphs
+    screen_segments = []
+    for p in paragraphs:
+        for seg in _split_paragraph_by_screen(p):
+            screen_segments.append(seg)
+    if not screen_segments:
+        return ""
+
+    indexed = list(enumerate(screen_segments))
 
     def _group_by_chars(items, max_chars: int):
         chunks = []
@@ -223,7 +267,7 @@ def generate_bilingual_body(fulltext: str, cfg: SmallLLMConfig) -> str:
 
     while pending and attempt < max_attempts:
         attempt += 1
-        to_process = [(idx, paragraphs[idx]) for idx in sorted(pending)]
+        to_process = [(idx, screen_segments[idx]) for idx in sorted(pending)]
         chunks = _group_by_chars(to_process, cfg.max_input_chars)
 
         for chunk in chunks:
@@ -267,7 +311,7 @@ def generate_bilingual_body(fulltext: str, cfg: SmallLLMConfig) -> str:
                     pending.remove(idx)
 
     parts: List[str] = []
-    for idx, para in enumerate(paragraphs):
+    for idx, para in enumerate(screen_segments):
         parts.append(para)
         tgt_text = translations.get(idx)
         if tgt_text:

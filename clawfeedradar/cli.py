@@ -113,6 +113,12 @@ def _cmd_run(args) -> int:
         except Exception:
             max_items = 12
 
+    # max_source_items: how many entries to pull from the source feed before scoring.
+    try:
+        max_source_items = int(os.environ.get("CLAWFEEDRADAR_MAX_SOURCE_ITEMS", "0") or "0")
+    except Exception:
+        max_source_items = 0
+
     return run_radar(
         root=root,
         url=url,
@@ -122,6 +128,7 @@ def _cmd_run(args) -> int:
         json_stdout=bool(args.json),
         source_lang=args.source_lang,
         target_lang=args.target_lang,
+        max_source_items=max_source_items,
     )
 
 

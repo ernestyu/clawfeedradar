@@ -193,6 +193,7 @@ def _run_pipeline_for_candidates(
     score_threshold: float,
     max_items: int,
     json_stdout: bool,
+    max_source_items: int = 0,
     source_lang: str | None,
     target_lang: str | None,
 ) -> int:
@@ -485,6 +486,7 @@ def run_radar(
     score_threshold: float,
     max_items: int,
     json_stdout: bool,
+    max_source_items: int = 0,
     source_lang: str | None,
     target_lang: str | None,
 ) -> int:
@@ -500,7 +502,11 @@ def run_radar(
     if stype == "unknown":
         raise RuntimeError(f"unknown source type for URL: {url}")
 
-    candidates = fetch_candidates_from_source(stype, url)
+    # max_source_items controls how many feed entries we pull before scoring (0 means adapter default).
+    if max_source_items and max_source_items > 0:
+        candidates = fetch_candidates_from_source(stype, url, max_items=max_source_items)
+    else:
+        candidates = fetch_candidates_from_source(stype, url)
 
     return _run_pipeline_for_candidates(
         root=root,

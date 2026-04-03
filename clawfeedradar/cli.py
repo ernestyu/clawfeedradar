@@ -77,6 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--output", help="RSS XML output path (default: $CLAWFEEDRADAR_OUTPUT_DIR/radar.xml)")
     rp.add_argument("--score-threshold", type=float, default=0.0, help="minimum interest_score to keep a candidate")
     rp.add_argument("--max-items", type=int, default=None, help="maximum number of items in the feed (overrides CLAWFEEDRADAR_MAX_ITEMS or default 12)")
+    rp.add_argument("--max-source-items", type=int, default=None, help="max entries to pull from source feed before scoring (only for run)")
     rp.add_argument("--source-lang", help="source language hint for LLM (e.g. en, auto by default)")
     rp.add_argument("--target-lang", help="target language for summaries/translation (e.g. zh)")
     rp.add_argument("--json", action="store_true", help="also print selected items as JSON to stdout")
@@ -113,10 +114,10 @@ def _cmd_run(args) -> int:
         except Exception:
             max_items = 12
 
-    # max_source_items: how many entries to pull from the source feed before scoring.
-    try:
-        max_source_items = int(os.environ.get("CLAWFEEDRADAR_MAX_SOURCE_ITEMS", "0") or "0")
-    except Exception:
+    # max_source_items: CLI-only; how many entries to pull from the source feed before scoring.
+    if args.max_source_items is not None:
+        max_source_items = int(args.max_source_items)
+    else:
         max_source_items = 0
 
     return run_radar(

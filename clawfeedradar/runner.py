@@ -575,6 +575,7 @@ def schedule_from_sources_json(
         url = entry.get("url") or ""
         interval_hours = int(entry.get("interval_hours") or 0)
         max_entries = int(entry.get("max_entries") or 0) or 25
+        max_source_items = int(entry.get("max_source_items") or 0)
         source_lang = entry.get("source_lang")
         target_lang = entry.get("target_lang")
 
@@ -613,7 +614,10 @@ def schedule_from_sources_json(
             if stype == "unknown":
                 logger.warning("[schedule] unknown source type for %s", url)
                 continue
-            candidates = fetch_candidates_from_source(stype, url)
+            if max_source_items and max_source_items > 0:
+                candidates = fetch_candidates_from_source(stype, url, max_items=max_source_items)
+            else:
+                candidates = fetch_candidates_from_source(stype, url)
             logger.info("[schedule] fetched %d candidates for %s", len(candidates), label)
 
             # score_threshold: per-source config only (no env fallback).

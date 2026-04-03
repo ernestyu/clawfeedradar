@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clawfeedradar"
+version = "0.0.1"
+description = "Personal feed radar built on clawsqlite interest clusters"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["rss", "recommendation", "clawsqlite", "feed"]
+authors = [
+  { name = "Ernest Yu" }
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/ernestyu/clawfeedradar"
+Repository = "https://github.com/ernestyu/clawfeedradar.git"
+
+[project.scripts]
+clawfeedradar = "clawfeedradar.cli:main"
+
+[tool.setuptools]
+packages = ["clawfeedradar"]
+
+[tool.setuptools.package-data]
+clawfeedradar = []

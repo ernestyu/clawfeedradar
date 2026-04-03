@@ -305,7 +305,7 @@ def _run_pipeline_for_candidates(
         if distinct_hosts == 1:
             only_host = next(iter(host_counter.keys()))
             logger.info(
-                "[pipeline] single host %%r detected; requests to this host are serialized via host-level locks",
+                "[pipeline] single host %r detected; requests to this host are serialized via host-level locks",
                 only_host,
             )
         with ThreadPoolExecutor(max_workers=max_workers) as ex:

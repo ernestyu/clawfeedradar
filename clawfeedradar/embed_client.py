@@ -86,10 +86,8 @@ def embed_text(text: str, cfg: EmbeddingConfig, *, timeout: int = 60) -> List[fl
 
     if resp.status_code >= 400:
         snippet = resp.text[:300]
-        logger.warning("[embedding] HTTPError %s %s: %s", resp.status_code, resp.reason_phrase, snippet)
-        raise RuntimeError(
-            f"Embedding HTTPError: {resp.status_code} {resp.reason_phrase} {snippet}"
-        )
+        logger.warning("[embedding] HTTPError %s %s: %s; degrading to zero vector", resp.status_code, resp.reason_phrase, snippet)
+        return [0.0] * cfg.vec_dim
 
     body = resp.text
     try:

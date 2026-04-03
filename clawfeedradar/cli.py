@@ -78,6 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--score-threshold", type=float, default=0.0, help="minimum interest_score to keep a candidate")
     rp.add_argument("--max-items", type=int, default=None, help="maximum number of items in the feed (overrides CLAWFEEDRADAR_MAX_ITEMS or default 12)")
     rp.add_argument("--max-source-items", type=int, default=None, help="max entries to pull from source feed before scoring (only for run)")
+    rp.add_argument("--feed-title", help="RSS channel title for this run (default: clawfeedradar)")
     rp.add_argument("--source-lang", help="source language hint for LLM (e.g. en, auto by default)")
     rp.add_argument("--target-lang", help="target language for summaries/translation (e.g. zh)")
     rp.add_argument("--json", action="store_true", help="also print selected items as JSON to stdout")
@@ -124,6 +125,7 @@ def _cmd_run(args) -> int:
         root=root,
         url=url,
         output_xml=output_xml,
+        feed_title=args.feed_title,
         score_threshold=float(args.score_threshold or 0.0),
         max_items=max_items,
         json_stdout=bool(args.json),

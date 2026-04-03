@@ -190,6 +190,7 @@ def _run_pipeline_for_candidates(
     root: str | None,
     candidates: list[Candidate],
     output_xml: str,
+    feed_title: str | None,
     score_threshold: float,
     max_items: int,
     json_stdout: bool,
@@ -430,6 +431,8 @@ def _run_pipeline_for_candidates(
     # 6) write minimal RSS XML
     last_build = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S %z")
 
+    channel_title = escape(feed_title or "clawfeedradar")
+
     items_xml: list[str] = []
     for row in enriched:
         c = row["candidate"]
@@ -460,7 +463,7 @@ def _run_pipeline_for_candidates(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
         "<rss version=\"2.0\">"
         "<channel>"
-        "<title>clawfeedradar</title>"
+        f"<title>{channel_title}</title>"
         "<link>https://example.com/</link>"
         "<description>Personal feed radar powered by clawsqlite.</description>"
         f"<lastBuildDate>{last_build}</lastBuildDate>"
@@ -487,6 +490,7 @@ def run_radar(
     root: str | None,
     url: str,
     output_xml: str,
+    feed_title: str | None,
     score_threshold: float,
     max_items: int,
     json_stdout: bool,
@@ -516,6 +520,7 @@ def run_radar(
         root=root,
         candidates=candidates,
         output_xml=output_xml,
+        feed_title=feed_title,
         score_threshold=score_threshold,
         max_items=max_items,
         json_stdout=json_stdout,
@@ -580,6 +585,7 @@ def schedule_from_sources_json(
         interval_hours = int(entry.get("interval_hours") or 0)
         max_entries = int(entry.get("max_entries") or 0) or 25
         max_source_items = int(entry.get("max_source_items") or 0)
+        feed_title = entry.get("feed_title")
         source_lang = entry.get("source_lang")
         target_lang = entry.get("target_lang")
 
@@ -634,6 +640,7 @@ def schedule_from_sources_json(
                 root=root,
                 candidates=candidates,
                 output_xml=str(out_xml),
+                feed_title=feed_title,
                 score_threshold=score_threshold,
                 max_items=max_entries,
                 json_stdout=False,

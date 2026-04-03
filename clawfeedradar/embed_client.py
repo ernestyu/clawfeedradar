@@ -107,23 +107,35 @@ def embed_text(text: str, cfg: EmbeddingConfig, *, timeout: int = 60) -> List[fl
 
 
 def _chunk_for_embedding(texts: list[str]) -> list[list[str]]:
-    """Group texts into smaller batches to respect model limits.
+    """Group texts into batches based on an approximate token budget.
 
-    We use two simple controls:
-      - CLAWFEEDRADAR_EMBED_MAX_BATCH_TEXTS (default 3)
-      - CLAWFEEDRADAR_EMBED_MAX_BATCH_CHARS (default 24000)
+    Primary control:
+      - CLAWFEEDRADAR_EMBED_MAX_BATCH_TOKENS (default 8192)
 
-    This avoids sending e.g. 20 long (~2000字) articles in a single batch,
-    which can easily blow up memory on the embedding server.
+    We approximate tokens via a chars-per-token ratio:
+      - CLAWFEEDRADAR_EMBED_APPROX_CHARS_PER_TOKEN (default 4.0)
+
+    For backward compatibility, if CLAWFEEDRADAR_EMBED_MAX_BATCH_CHARS is set,
+    it overrides the derived char budget.
     """
     import os as _os
 
-    max_batch_texts = int(_os.environ.get("CLAWFEEDRADAR_EMBED_MAX_BATCH_TEXTS", "3") or "3")
-    if max_batch_texts <= 0:
-        max_batch_texts = 3
-    max_batch_chars = int(_os.environ.get("CLAWFEEDRADAR_EMBED_MAX_BATCH_CHARS", "24000") or "24000")
-    if max_batch_chars <= 0:
-        max_batch_chars = 24000
+    max_tokens = int(_os.environ.get("CLAWFEEDRADAR_EMBED_MAX_BATCH_TOKENS", "8192") or "8192")
+    if max_tokens <= 0:
+        max_tokens = 8192
+    approx_cpt = float(_os.environ.get("CLAWFEEDRADAR_EMBED_APPROX_CHARS_PER_TOKEN", "4.0") or "4.0")
+    if approx_cpt <= 0:
+        approx_cpt = 4.0
+    char_budget = int(max_tokens * approx_cpt)
+
+    override_chars = _os.environ.get("CLAWFEEDRADAR_EMBED_MAX_BATCH_CHARS")
+    if override_chars:
+        try:
+            v = int(override_chars)
+            if v > 0:
+                char_budget = v
+        except Exception:
+            pass
 
     batches: list[list[str]] = []
     current: list[str] = []
@@ -131,12 +143,11 @@ def _chunk_for_embedding(texts: list[str]) -> list[list[str]]:
     for t in texts:
         t = t or ""
         t_len = len(t)
-        # If single text already exceeds char budget, put it alone.
         if not current:
             current = [t]
             current_chars = t_len
             continue
-        if len(current) >= max_batch_texts or current_chars + t_len > max_batch_chars:
+        if current_chars + t_len > char_budget:
             batches.append(current)
             current = [t]
             current_chars = t_len
@@ -146,6 +157,9 @@ def _chunk_for_embedding(texts: list[str]) -> list[list[str]]:
     if current:
         batches.append(current)
     return batches
+
+
+
 
 
 def embed_texts(texts: list[str], cfg: EmbeddingConfig, *, timeout: int = 60) -> list[list[float]]:

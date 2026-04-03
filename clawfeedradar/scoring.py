@@ -48,7 +48,7 @@ def load_score_params_from_env() -> ScoreParams:
     - CLAWFEEDRADAR_W_SIM_SECOND
     - CLAWFEEDRADAR_W_RECENCY
     - CLAWFEEDRADAR_W_POPULARITY
-    - CLAWFEEDRADAR_RECENCY_HALF_LIFE_SEC
+    - CLAWFEEDRADAR_RECENCY_HALF_LIFE_DAYS
     """
 
     return ScoreParams(
@@ -56,7 +56,7 @@ def load_score_params_from_env() -> ScoreParams:
         w_sim_second=_float_env("CLAWFEEDRADAR_W_SIM_SECOND", 0.2),
         w_recency=_float_env("CLAWFEEDRADAR_W_RECENCY", 0.1),
         w_popularity=_float_env("CLAWFEEDRADAR_W_POPULARITY", 0.1),
-        recency_half_life=_float_env("CLAWFEEDRADAR_RECENCY_HALF_LIFE_SEC", 3 * 24 * 3600.0),
+        recency_half_life=_float_env("CLAWFEEDRADAR_RECENCY_HALF_LIFE_DAYS", 3.0) * 24 * 3600.0,
     )
 
 
@@ -82,12 +82,15 @@ def compute_interest_score(
     match = score_against_clusters(emb, clusters)
     sim_best = match.sim_best
     sim_second = match.sim_second
+    # 边缘度：靠近第二簇且不被第一簇极端“碾压”
+    border = sim_second * (1.0 - sim_best)
+
     rec = _recency_weight(cand.published_at, now, params.recency_half_life)
     pop = max(0.0, min(1.0, cand.popularity_score))
 
     interest = (
         params.w_sim_best * sim_best
-        + params.w_sim_second * sim_second
+        + params.w_sim_second * border
         + params.w_recency * rec
         + params.w_popularity * pop
     )

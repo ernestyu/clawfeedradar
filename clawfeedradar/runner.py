@@ -184,74 +184,6 @@ def _ensure_parent_dir(path: str) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
 
-def _select_items_with_diversity(
-    scored: List["ScoredItem"],
-    *,
-    score_threshold: float,
-    max_items: int,
-    per_cluster_cap: int,
-    explore_count: int,
-) -> List["ScoredItem"]:
-    """Select items with basic diversity + exploration.
-
-    - 先按 interest_score 过滤，再按 final_score 排序；
-    - exploitation：限制每个簇最多 per_cluster_cap 条；
-    - exploration：从剩余候选中挑若干“边界型”条目（sim_second 高且 sim_best 不极端）。
-    """
-
-    from .models import ScoredItem  # type: ignore  # avoid circular type issues
-
-    if max_items <= 0:
-        return []
-
-    pool: List[ScoredItem] = [s for s in scored if s.interest_score >= score_threshold]
-    if not pool:
-        return []
-
-    pool.sort(key=lambda x: x.final_score, reverse=True)
-
-    max_main = max_items
-    if explore_count > 0 and max_items > explore_count:
-        max_main = max_items - explore_count
-
-    # Exploitation: cluster quotas
-    per_cluster: dict[int, int] = {}
-    main_selected: List[ScoredItem] = []
-    for item in pool:
-        if len(main_selected) >= max_main:
-            break
-        cid = item.match.best_cluster_id
-        if cid is None:
-            cid = -1
-        count = per_cluster.get(cid, 0)
-        if count >= per_cluster_cap:
-            continue
-        main_selected.append(item)
-        per_cluster[cid] = count + 1
-
-    used_ids = {id(it) for it in main_selected}
-    remaining: List[ScoredItem] = [s for s in pool if id(s) not in used_ids]
-
-    # Exploration: prefer items near multiple clusters (sim_second 高且 sim_best 不极端)
-    def _explore_score(it: ScoredItem) -> float:
-        sb = float(it.match.sim_best)
-        ss = float(it.match.sim_second)
-        return ss * (1.0 - sb)
-
-    explore_selected: List[ScoredItem] = []
-    if explore_count > 0 and remaining:
-        remaining_sorted = sorted(remaining, key=_explore_score, reverse=True)
-        for it in remaining_sorted:
-            if len(explore_selected) >= explore_count:
-                break
-            if len(main_selected) + len(explore_selected) >= max_items:
-                break
-            explore_selected.append(it)
-
-    return main_selected + explore_selected
-
-
-
 
 def _run_pipeline_for_candidates(
     *,
@@ -387,29 +319,14 @@ def _run_pipeline_for_candidates(
     logger.info("[pipeline] scoring %d candidates", len(filtered))
     scored = score_candidates(filtered, embs, clusters, params=score_params)
 
-    # 3) select with basic diversity + exploration
-    def _int_env(name: str, default: int) -> int:
-        try:
-            raw = os.environ.get(name, "")
-            if not raw:
-                return default
-            v = int(raw)
-            if v <= 0:
-                return default
-            return v
-        except Exception:
-            return default
+    # 3) select top-N by final_score with a simple score_threshold filter
+    if max_items <= 0:
+        max_items = 12
 
-    per_cluster_cap = _int_env("CLAWFEEDRADAR_PER_CLUSTER_CAP", 3)
-    explore_count = _int_env("CLAWFEEDRADAR_EXPLORE_COUNT", 2)
-
-    selected = _select_items_with_diversity(
-        scored,
-        score_threshold=score_threshold,
-        max_items=max_items if max_items > 0 else 12,
-        per_cluster_cap=per_cluster_cap,
-        explore_count=explore_count,
-    )
+    selected = [
+        s for s in scored
+        if s.interest_score >= score_threshold
+    ][:max_items]
 
     logger.info(
         "[pipeline] selected %d items (score_threshold=%.3f, max_items=%d)",

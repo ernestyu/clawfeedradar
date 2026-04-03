@@ -268,7 +268,7 @@ def generate_bilingual_body(fulltext: str, cfg: SmallLLMConfig) -> str:
     while pending and attempt < max_attempts:
         attempt += 1
         to_process = [(idx, screen_segments[idx]) for idx in sorted(pending)]
-        chunks = _group_by_chars(to_process, cfg.max_input_chars)
+        chunks = _group_by_chars(to_process, 10000)
 
         for chunk in chunks:
             payload_obj = {

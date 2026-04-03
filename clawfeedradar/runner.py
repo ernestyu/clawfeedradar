@@ -320,19 +320,20 @@ def _run_pipeline_for_candidates(
     scored = score_candidates(filtered, embs, clusters, params=score_params)
 
     # 3) select top-N by final_score with a simple score_threshold filter
+    total_scored = len(scored)
     if max_items <= 0:
         max_items = 12
 
-    selected = [
-        s for s in scored
-        if s.interest_score >= score_threshold
-    ][:max_items]
+    passed = [s for s in scored if s.interest_score >= score_threshold]
+    selected = passed[:max_items]
 
     logger.info(
-        "[pipeline] selected %d items (score_threshold=%.3f, max_items=%d)",
+        "[pipeline] scored=%d, passed_threshold=%d, max_items=%d, selected=%d (score_threshold=%.3f)",
+        total_scored,
+        len(passed),
+        int(max_items),
         len(selected),
         float(score_threshold),
-        int(max_items if max_items > 0 else 12),
     )
 
     # 4) optional: LLM summaries (serial, best-effort)

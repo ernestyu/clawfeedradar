@@ -322,15 +322,54 @@ def _run_pipeline_for_candidates(
         logger.info("[pipeline] all candidates skipped as already seen in last 7 days")
         return 0
 
-    logger.info("[pipeline] embedding %d candidates", len(filtered))
+        logger.info("[pipeline] embedding %d candidates", len(filtered))
 
-    # 2) embed and score - fetch fulltext once per URL, then build long summaries
+    # 2) embed and score - fetch fulltext once per URL (with per-host serial / cross-host parallel),
+    # then build long summaries for embedding.
     fulltexts: dict[str, str] = {}
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from urllib.parse import urlparse
+    import threading
+
+    max_workers = int(os.environ.get("CLAWFEEDRADAR_SCRAPE_WORKERS", "4") or "4")
+    if max_workers <= 0:
+        max_workers = 4
+
+    host_locks: dict[str, threading.Lock] = {}
+
+    def _get_host_lock(host: str) -> threading.Lock:
+        lock = host_locks.get(host)
+        if lock is None:
+            lock = threading.Lock()
+            host_locks[host] = lock
+        return lock
+
+    def _fetch_for_url(url: str) -> tuple[str, str]:
+        host = urlparse(url).netloc
+        lock = _get_host_lock(host)
+        with lock:
+            # Respect existing fetch_fulltext semantics (3 attempts + 3-10s backoff inside).
+            text = fetch_fulltext(url) or ""
+            return url, text
+
+    urls_to_fetch: list[str] = []
     for c in filtered:
         url = c.url
         if not url or url in fulltexts:
             continue
-        fulltexts[url] = fetch_fulltext(url) or ""
+        urls_to_fetch.append(url)
+
+    if urls_to_fetch:
+        logger.info(
+            "[pipeline] fetching fulltext for %d unique URLs with up to %d workers",
+            len(urls_to_fetch),
+            max_workers,
+        )
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {ex.submit(_fetch_for_url, u): u for u in urls_to_fetch}
+            for fut in as_completed(futures):
+                url, text = fut.result()
+                fulltexts[url] = text
 
     texts: list[str] = []
     long_summaries: dict[str, str] = {}
@@ -344,7 +383,6 @@ def _run_pipeline_for_candidates(
         long_summaries[c.url] = long_summary
 
     embs = embed_texts(texts, cfg.embedding)
-
     score_params = load_score_params_from_env()
     logger.info("[pipeline] scoring %d candidates", len(filtered))
     scored = score_candidates(filtered, embs, clusters, params=score_params)

@@ -235,3 +235,108 @@ clawfeedradar run \n  --root /path/to/knowledge_data \n  --url https://hnrss.org
 - `clawfeedradar schedule`：读取 `sources.json`（由你维护的源配置文件），按各源的 `interval_hours` 定期跑 radar，输出每源各自的 XML/JSON。
 
 `max-items` 遵循 `CLI > 环境变量 (CLAWFEEDRADAR_MAX_ITEMS) > 默认 12` 的优先级。
+
+
+## 使用指南（v0）
+
+### 1. 环境变量配置
+
+复制 `ENV.example` 为 `.env`，按你的机器修改：
+
+- clawsqlite 知识库：
+  - `CLAWSQLITE_ROOT` 指向 `knowledge_data` 根目录
+  - `CLAWSQLITE_DB` 如需要可显式覆盖
+- Embedding 服务（和 clawsqlite 共用）：
+  - `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` / `EMBEDDING_API_KEY`
+  - `CLAWSQLITE_VEC_DIM` 必须和 embedding 模型维度一致
+- clawfeedradar 输出：
+  - `CLAWFEEDRADAR_OUTPUT_DIR`：XML/JSON 输出目录
+- 小 LLM（摘要 + 中英对照）：
+  - `SMALL_LLM_BASE_URL` / `SMALL_LLM_MODEL` / `SMALL_LLM_API_KEY`
+  - `CLAWFEEDRADAR_LLM_MAX_OUTPUT_CHARS`：单次调用输出预算（字符级）
+  - `CLAWFEEDRADAR_LLM_SLEEP_BETWEEN_MS`：两次调用间隔（毫秒）
+  - `CLAWFEEDRADAR_LLM_SOURCE_LANG` / `CLAWFEEDRADAR_LLM_TARGET_LANG`
+  - `CLAWFEEDRADAR_LLM_MAX_PARAGRAPH_CHARS`：每个中英对照段的最大字符数（一屏），例如 2400
+- 抓全文：
+  - `CLAWFEEDRADAR_SCRAPE_CMD` 指向一个调用 clawfetch 的 wrapper
+  - `CLAWFEEDRADAR_SCRAPE_WORKERS` 控制抓取并发（默认 4）
+- 评分权重：
+  - `CLAWFEEDRADAR_W_SIM_BEST` / `W_SIM_SECOND` / `W_RECENCY` / `W_POPULARITY`
+  - `CLAWFEEDRADAR_RECENCY_HALF_LIFE_DAYS`：recency 半衰期（天）
+- 默认条目数：
+  - `CLAWFEEDRADAR_MAX_ITEMS`：不写 `--max-items` 时的默认条数
+
+### 2. 单源调试：`clawfeedradar run`
+
+示例：只对 HN frontpage 跑一轮 radar：
+
+```bash
+clawfeedradar run \n  --root /home/node/.openclaw/workspace/knowledge_data \
+  --url https://hnrss.org/frontpage \
+  --output ./feeds/hn-frontpage.xml \
+  --score-threshold 0.4 \
+  --max-items 5 \
+  --source-lang en \
+  --target-lang zh
+```
+
+行为：
+
+- 从给定 URL 拉取候选（当前实现支持 HN RSS / 普通 RSS）
+- 对每条候选做 embedding、和兴趣簇计算 `sim_best` / `sim_second` 等
+- 按公式计算兴趣分：
+  - 主簇：`W_SIM_BEST * sim_best`
+  - 边缘补偿：`W_SIM_SECOND * (sim_second * (1 - sim_best))`
+  - 时间衰减：`W_RECENCY * recency`（按 `RECENCY_HALF_LIFE_DAYS` 计算）
+  - 热度：`W_POPULARITY * popularity_score`
+- 过滤掉 `interest_score < score_threshold` 的候选
+- 按 `final_score` 排序，取前 `max-items` 条
+- 对每条选中条目：
+  - 只抓一次全文（带重试 + backoff），构造长摘要+中文预览
+  - 用小 LLM 生成中英对照正文，按屏段切分（由 `LLM_MAX_PARAGRAPH_CHARS` 控制）
+- 输出：
+  - `./feeds/hn-frontpage.xml`：RSS feed，`<description>` 包含 preview + bilingual body
+  - `./feeds/hn-frontpage.json`：JSON sidecar，包含 fulltext / summary_preview / body_bilingual / 打分信息
+
+### 3. 多源调度：`clawfeedradar schedule`
+
+`sources.json` 示例：
+
+```jsonc
+[
+  {
+    "label": "hn-frontpage",
+    "url": "https://hnrss.org/frontpage",
+    "interval_hours": 8,
+    "max_entries": 5,
+    "score_threshold": 0.4,
+    "source_lang": "en",
+    "target_lang": "zh",
+    "last_success_at": null,
+    "last_error": null
+  }
+]
+```
+
+命令：
+
+```bash
+clawfeedradar schedule \n  --root /home/node/.openclaw/workspace/knowledge_data \
+  --sources-json /home/node/.openclaw/workspace/clawfeedradar/sources.json \
+  --output-dir /home/node/.openclaw/workspace/clawfeedradar/feeds
+```
+
+行为：
+
+- 遍历 `sources.json` 的每个 entry：
+  - 根据 `interval_hours` + `last_success_at` 判定是否到点
+  - 若到点：调用与 `run` 相同的 pipeline
+  - 每个源输出 `{label}.xml` + `{label}.json` 到 `output-dir`
+  - 更新该 entry 的 `last_success_at` / `last_error`
+
+### 4. English quick summary
+
+- Configure env via `.env` (see `ENV.example`) for: knowledge root, embedding, LLM, scraping, scoring weights.
+- Use `clawfeedradar run` to debug a single source URL and produce one XML/JSON pair.
+- Use `clawfeedradar schedule` with a `sources.json` file to run multiple sources periodically, each producing `{label}.xml` + `{label}.json`.
+- RSS `<description>` now includes both the preview summary and the full bilingual body for each selected item.

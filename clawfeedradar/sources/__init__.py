@@ -43,7 +43,7 @@ def detect_source_type(source_url: str) -> str:
     return "unknown"
 
 
-def fetch_candidates_from_source(source_type: str, source_url: str) -> List[Candidate]:
+def fetch_candidates_from_source(source_type: str, source_url: str, max_items: int | None = None) -> List[Candidate]:
     """拉取单个源的候选列表。
 
     - rss: 通过 feedparser 解析 RSS/Atom feed；
@@ -52,6 +52,8 @@ def fetch_candidates_from_source(source_type: str, source_url: str) -> List[Cand
     """
 
     if source_type == "rss":
+        if max_items is not None and max_items > 0:
+            return fetch_candidates_from_rss(source_url, max_items=max_items)
         return fetch_candidates_from_rss(source_url)
 
     if source_type == "hackernews":

@@ -592,11 +592,17 @@ def schedule_from_sources_json(
             candidates = fetch_candidates_from_source(stype, url)
             logger.info("[schedule] fetched %d candidates for %s", len(candidates), label)
 
+            # score_threshold: per-source config only (no env fallback).
+            try:
+                score_threshold = float(entry.get("score_threshold") or 0.0)
+            except Exception:
+                score_threshold = 0.0
+
             _run_pipeline_for_candidates(
                 root=root,
                 candidates=candidates,
                 output_xml=str(out_xml),
-                score_threshold=0.0,
+                score_threshold=score_threshold,
                 max_items=max_entries,
                 json_stdout=False,
                 source_lang=source_lang,

@@ -236,7 +236,8 @@ def _run_pipeline_for_candidates(
     # Load global seen-URL state (7-day window)
     state_path = Path.cwd() / "state" / "seen_urls.json"
     seen_urls = _load_seen_urls_state(state_path)
-    now = datetime.now(timezone.utc)
+    logger.info("[pipeline] loaded %d seen URLs (last 7 days window)", len(seen_urls))
+    now_dt = datetime.now(timezone.utc)
 
     # Filter out candidates whose URLs were seen within the last 7 days
     filtered: list[Candidate] = []
@@ -246,7 +247,7 @@ def _run_pipeline_for_candidates(
         if not norm:
             continue
         ts = seen_urls.get(norm)
-        if ts is not None and (now - ts).total_seconds() <= 7 * 24 * 3600:
+        if ts is not None and (now_dt - ts).total_seconds() <= 7 * 24 * 3600:
             continue
         filtered.append(c)
         normalized_urls.append(norm)
@@ -427,7 +428,7 @@ def _run_pipeline_for_candidates(
         print(json.dumps(payload, ensure_ascii=False, indent=2))
 
     # 6) write minimal RSS XML
-    now = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S %z")
+    last_build = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S %z")
 
     items_xml: list[str] = []
     for row in enriched:
@@ -462,7 +463,7 @@ def _run_pipeline_for_candidates(
         "<title>clawfeedradar</title>"
         "<link>https://example.com/</link>"
         "<description>Personal feed radar powered by clawsqlite.</description>"
-        f"<lastBuildDate>{now}</lastBuildDate>"
+        f"<lastBuildDate>{last_build}</lastBuildDate>"
         + "".join(items_xml) + "</channel></rss>"
     )
 
@@ -470,9 +471,12 @@ def _run_pipeline_for_candidates(
     _ensure_parent_dir(str(output_xml_path))
     output_xml_path.write_text(rss, encoding="utf-8")
 
-    # Update seen-URL state for processed candidates
+    logger.info("[pipeline] wrote %d items to %s (json=%s); seen_urls now=%d",
+                len(enriched), output_xml_path, output_json_path, len(seen_urls))
+
+    # Update seen-URL state for processed candidates (7-day window)
     for norm in normalized_urls:
-        seen_urls[norm] = now
+        seen_urls[norm] = now_dt
     _save_seen_urls_state(state_path, seen_urls)
 
     return 0

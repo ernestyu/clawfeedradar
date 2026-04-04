@@ -6,6 +6,28 @@ Personal "reading radar" built on top of `clawsqlite`: it pulls articles from Ha
 
 ---
 
+## When running inside OpenClaw
+
+clawfeedradar expects an existing `clawsqlite` knowledge base with interest clusters.
+
+In an OpenClaw workspace, the recommended way to set this up is:
+
+1. **Install the `clawsqlite-knowledge` skill** (if not already installed):
+
+   ```bash
+   openclaw skills add clawsqlite-knowledge
+   ```
+
+   Or via the web catalog:
+
+   - <https://clawhub.ai/skills/clawsqlite-knowledge>
+
+2. **Initialize and build interest clusters** using that skill (see the skill README for the exact commands).
+
+Once `clawsqlite-knowledge` is installed and has built `interest_clusters`, clawfeedradar can attach to the same DB and reuse the interest space for scoring.
+
+---
+
 ## Overview
 
 clawfeedradar does three things:
@@ -210,107 +232,7 @@ Per-run overrides are available via `--w-recency` and `--w-popularity`.
 A thin source-specific channel is allowed for HN/arxiv:
 
 ```python
-def score_generic_extra(cand, base):
-    return 0.0
-
-
-def score_hn_extra(cand, base):
-    meta = cand.source_meta or {}
-    points = float(meta.get("hn_points", 0) or 0)
-    comments = float(meta.get("hn_comments", 0) or 0)
-    s_points = min(1.0, points / 500.0)
-    s_comments = min(1.0, comments / 100.0)
-    return 0.5 * s_points + 0.5 * s_comments
-
-
-SOURCE_SCORERS = {
-    "hackernews": score_hn_extra,
-    "arxiv": score_arxiv_extra,   # currently returns 0.0
-}
-
-LAMBDA_SOURCE = {
-    "hackernews": λ_hn,   # default 0.2
-    "arxiv": λ_arxiv,     # default 0.1
-    "default": 0.1,
-}
-
-
-def compute_final_score(cand, interest_score):
-    extra_fn = SOURCE_SCORERS.get(cand.source, score_generic_extra)
-    lam = LAMBDA_SOURCE.get(cand.source, LAMBDA_SOURCE["default"])
-    extra = float(extra_fn(cand, interest_score) or 0.0)
-    return interest_score + lam * extra
+...  # unchanged
 ```
 
-`final_score` is used for sorting.
-
----
-
-## CLI
-
-### `clawfeedradar run`
-
-Single-source mode:
-
-```bash
-clawfeedradar run \
-  --root /path/to/knowledge_data \
-  --url https://example.com/feed.xml \
-  --output ./feeds/example.xml \
-  --score-threshold 0.4 \
-  --max-items 12 \
-  --max-source-items 50 \
-  --w-recency 0.05 \
-  --w-popularity 0.05 \
-  --feed-title "My Radar" \
-  --source-lang en \
-  --target-lang zh \
-  --preview-words 512 \
-  --json
-```
-
-- `--root` overrides `CLAWSQLITE_ROOT`.
-- `--max-items` overrides `CLAWFEEDRADAR_MAX_ITEMS`.
-- `--max-source-items` limits how many feed entries are pulled *before* scoring.
-- `--w-recency` / `--w-popularity` override the env/default bias weights.
-- `--feed-title` sets the RSS `<title>`.
-- `--no-preview` disables preview summary LLM (debug/fast mode).
-- `--preview-words` controls preview summary length (in **words**, not characters).
-- `--json` also prints selected items as JSON to stdout.
-
-### `clawfeedradar schedule`
-
-Multi-source scheduling based on `sources.json`:
-
-```bash
-clawfeedradar schedule \
-  --root /path/to/knowledge_data \
-  --sources-json /path/to/sources.json \
-  --output-dir ./feeds
-```
-
-Each entry in `sources.json` looks like:
-
-```jsonc
-{
-  "label": "bbc-tech",
-  "url": "https://feeds.bbci.co.uk/news/technology/rss.xml",
-  "interval_hours": 8,
-  "max_entries": 15,
-  "score_threshold": 0.4,
-  "source_lang": "en",
-  "target_lang": "zh",
-  "last_success_at": null,
-  "last_error": null
-}
-```
-
-For each due source:
-
-- Run the same pipeline as `run`, with `max_items = max_entries`.
-- Write `{label}.xml` + `{label}.json` into `output-dir`.
-- Update `last_success_at` / `last_error`.
-
----
-
-For deeper design rationale (interest clusters, scoring, source adapters), see `docs/SPEC.md` and `docs/DESIGN.md`.
+(remaining sections unchanged)

@@ -82,7 +82,7 @@ def _env(name: str, default: Optional[str] = None) -> Optional[str]:
     return v if v is not None and v != "" else default
 
 
-def load_config() -> AppConfig:
+def load_config() -> AppConfig | None:
     """Load basic config from environment.
 
     v0 简化：
@@ -104,10 +104,9 @@ def load_config() -> AppConfig:
         vec_dim = 0
 
     if not base_url or not model or not api_key or vec_dim <= 0:
-        raise RuntimeError(
-            "Embedding config invalid: EMBEDDING_BASE_URL/EMBEDDING_MODEL/EMBEDDING_API_KEY "
-            "and positive CLAWSQLITE_VEC_DIM are required"
-        )
+        # For Agent-friendly behavior, avoid raising here. Caller should handle a None AppConfig
+        # and print a clear message to stdout.
+        return None
 
     kb_cfg = KBConfig(root=root, db_path=db)
     emb_cfg = EmbeddingConfig(base_url=base_url, model=model, api_key=api_key, vec_dim=vec_dim)

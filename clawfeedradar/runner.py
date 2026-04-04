@@ -211,6 +211,15 @@ def _run_pipeline_for_candidates(
         os.environ["CLAWSQLITE_ROOT"] = root
 
     cfg = load_config()
+    if cfg is None:
+        msg = (
+            "[error] embedding config invalid: EMBEDDING_BASE_URL/EMBEDDING_MODEL/EMBEDDING_API_KEY "
+            "and positive CLAWSQLITE_VEC_DIM are required. "
+            "Set these in the environment or .env, then rerun clawfeedradar."
+        )
+        print(msg)
+        logger.error(msg)
+        return 1
 
     logger.info("[pipeline] using KB at %s", cfg.kb.db_path)
 
@@ -587,7 +596,10 @@ def run_radar(
     URL and the pipeline fetches candidates from that source only.
     """
     if not url:
-        raise RuntimeError("url is required")
+        msg = "[error] url is required; please pass --url <feed_url>"
+        print(msg)
+        logger.error(msg)
+        return 1
 
     stype = detect_source_type(url)
     if stype == "unknown":

@@ -591,7 +591,8 @@ def run_radar(
 
     stype = detect_source_type(url)
     if stype == "unknown":
-        raise RuntimeError(f"unknown source type for URL: {url}")
+        logger.warning("[pipeline] unknown source type for URL: %s; treating as generic RSS", url)
+        stype = "rss"
 
     # max_source_items controls how many feed entries we pull before scoring (0 means adapter default).
     if max_source_items and max_source_items > 0:

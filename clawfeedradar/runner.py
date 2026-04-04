@@ -238,10 +238,27 @@ def _run_pipeline_for_candidates(
         )
 
     # 1) load clusters
-    clusters = load_clusters(cfg.kb.db_path, cfg.embedding.vec_dim)
+    try:
+        clusters = load_clusters(cfg.kb.db_path, cfg.embedding.vec_dim)
+    except Exception as e:
+        msg = (
+            f"[error] failed to load interest_clusters from KB at {cfg.kb.db_path!r}: {e}. "
+            "Ensure clawsqlite-knowledge is installed and the DB has interest_clusters; "
+            "run 'clawsqlite knowledge build-interest-clusters' first."
+        )
+        print(msg)
+        logger.error(msg)
+        return 1
+
     logger.info("[pipeline] loaded %d clusters", len(clusters))
     if not clusters:
-        raise RuntimeError("No interest_clusters found; run 'clawsqlite knowledge build-interest-clusters' first")
+        msg = (
+            "[error] no interest_clusters found in KB; run 'clawsqlite knowledge build-interest-clusters' "
+            "to generate interest clusters before running clawfeedradar."
+        )
+        print(msg)
+        logger.error(msg)
+        return 1
 
     if not candidates:
         logger.info("[pipeline] no candidates fetched from source; exiting")

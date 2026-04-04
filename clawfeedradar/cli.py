@@ -85,7 +85,6 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--target-lang", help="target language for summaries/translation (e.g. zh)")
     rp.add_argument("--no-preview", action="store_true", help="disable preview summary LLM (debug/fast mode)")
     rp.add_argument("--preview-words", type=int, default=None, help="target length for preview summary in words (run mode)")
-    rp.add_argument("--no-preview", action="store_true", help="disable preview summary LLM (debug/fast mode)")
     rp.add_argument("--json", action="store_true", help="also print selected items as JSON to stdout")
     rp.set_defaults(func=_cmd_run)
 

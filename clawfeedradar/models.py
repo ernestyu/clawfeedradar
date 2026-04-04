@@ -38,6 +38,7 @@ class InterestMatch:
     best_cluster_id: int
     sim_best: float
     sim_second: float
+    best_cluster_weight: float
 
 
 @dataclass
@@ -46,5 +47,6 @@ class ScoredItem:
 
     candidate: Candidate
     interest_score: float
+    interest_score_raw: float
     final_score: float
     match: InterestMatch

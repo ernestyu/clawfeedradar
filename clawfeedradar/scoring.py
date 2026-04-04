@@ -189,10 +189,15 @@ def score_candidates(
             elif sim > second_sim:
                 second_sim = sim
 
-        interest = float(total)
-        # Apply optional non-linear stretching: interest_nl = sigmoid(interest)
-        interest = _stretch_interest(interest)
-        match = InterestMatch(best_cluster_id=best_cluster_id, sim_best=best_sim, sim_second=second_sim)
+        interest_raw = float(total)
+        # Apply non-linear stretching: interest_nl = sigmoid(interest_raw)
+        interest = _stretch_interest(interest_raw)
+        match = InterestMatch(
+            best_cluster_id=best_cluster_id,
+            sim_best=best_sim,
+            sim_second=second_sim,
+            best_cluster_weight=cluster_weights.get(best_cluster_id, 0.0),
+        )
 
         # 时间与源特化作为轻度偏置
         rec = _recency_weight(cand.published_at, now, params.recency_half_life)
@@ -202,7 +207,7 @@ def score_candidates(
         biased_interest = interest + interest_bias
 
         final = compute_final_score(cand, biased_interest)
-        out.append(ScoredItem(candidate=cand, interest_score=interest, final_score=final, match=match))
+        out.append(ScoredItem(candidate=cand, interest_score=interest, interest_score_raw=interest_raw, final_score=final, match=match))
 
     out.sort(key=lambda x: x.final_score, reverse=True)
     return out

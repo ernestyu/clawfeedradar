@@ -260,8 +260,6 @@ def _run_pipeline_for_candidates(
         logger.info("[pipeline] all candidates skipped as already seen in last 7 days")
         return 0
 
-        logger.info("[pipeline] embedding %d candidates", len(filtered))
-
     # 2) embed and score - fetch fulltext once per URL (with per-host serial / cross-host parallel),
     # then build long summaries for embedding.
     fulltexts: dict[str, str] = {}

@@ -444,11 +444,12 @@ def _run_pipeline_for_candidates(
     enriched: list[dict] = []
     for item in selected:
         c = item.candidate
-        # Reuse fulltext fetched earlier in this pipeline when embedding,
-        # fall back to a fresh fetch only if missing.
+        # Reuse fulltext fetched earlier in this pipeline when embedding.
+        # For LLM preview/bilingual we do not trigger additional fetch_fulltext calls;
+        # if fulltext is missing here, we gracefully skip or degrade LLM output.
         fulltext = fulltexts.get(c.url, "")
         if not fulltext:
-            fulltext = fetch_fulltext(c.url) or ""
+            logger.info("[llm] no fulltext available for URL %s; skipping preview/bilingual fetch", c.url)
         summary_preview = ""
         body_bilingual = ""
         if fulltext and llm_cfg is not None:

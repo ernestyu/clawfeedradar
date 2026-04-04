@@ -338,7 +338,7 @@ def generate_tags_bulk(summaries: list[str], cfg: SmallLLMConfig) -> list[str]:
     tgt = cfg.target_lang
 
     # Simple batching heuristic: group up to 16 summaries per LLM call.
-    def _chunks(idxs, n=16):
+    def _chunks(idxs, n=4):
         idxs = list(idxs)
         for i in range(0, len(idxs), n):
             yield idxs[i:i+n]

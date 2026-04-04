@@ -54,8 +54,8 @@ def load_score_params_from_env() -> ScoreParams:
     return ScoreParams(
         w_sim_best=_float_env("CLAWFEEDRADAR_W_SIM_BEST", 0.6),
         w_sim_second=_float_env("CLAWFEEDRADAR_W_SIM_SECOND", 0.2),
-        w_recency=_float_env("CLAWFEEDRADAR_W_RECENCY", 0.1),
-        w_popularity=_float_env("CLAWFEEDRADAR_W_POPULARITY", 0.1),
+        w_recency=_float_env("CLAWFEEDRADAR_W_RECENCY", 0.05),
+        w_popularity=_float_env("CLAWFEEDRADAR_W_POPULARITY", 0.05),
         recency_half_life=_float_env("CLAWFEEDRADAR_RECENCY_HALF_LIFE_DAYS", 3.0) * 24 * 3600.0,
     )
 

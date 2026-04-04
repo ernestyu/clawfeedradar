@@ -195,6 +195,7 @@ def _run_pipeline_for_candidates(
     max_items: int,
     json_stdout: bool,
     max_source_items: int = 0,
+    score_params: ScoreParams | None = None,
     source_lang: str | None,
     target_lang: str | None,
 ) -> int:
@@ -330,6 +331,7 @@ def _run_pipeline_for_candidates(
         summaries_list.append(long_summary)
 
     # Generate tags for long summaries via small LLM (batch, best-effort)
+    logger.info("[llm-tag] generating tags for %d summaries (batch, max_attempts=3)", len(summaries_list))
     llm_cfg_tags = load_small_llm_config()
     if llm_cfg_tags is not None:
         try:
@@ -340,6 +342,8 @@ def _run_pipeline_for_candidates(
     if llm_cfg_tags is not None:
         try:
             tags_list = generate_tags_bulk(summaries_list, llm_cfg_tags)
+            ok = sum(1 for t in tags_list if t)
+            logger.info("[llm-tag] generated tags for %d/%d summaries", ok, len(summaries_list))
         except Exception as e:
             logger.warning("[llm-tag] bulk tag generation failed: %s", e)
             tags_list = ["" for _ in summaries_list]
@@ -347,8 +351,10 @@ def _run_pipeline_for_candidates(
         logger.info("[llm-tag] small LLM config missing; skip tag generation")
 
     # Embed summaries and tags (serial embedding client inside embed_texts)
+    logger.info("[pipeline] embedding %d summaries (serial)", len(summaries_list))
     summary_embs = embed_texts(summaries_list, cfg.embedding)
     tag_embs: list[list[float]] = []
+    logger.info("[pipeline] embedding %d tag texts (serial)", len(tags_list))
     for tags in tags_list:
         if not tags:
             tag_embs.append([0.0] * cfg.embedding.vec_dim)
@@ -390,7 +396,7 @@ def _run_pipeline_for_candidates(
     # Score candidates using interest embeddings and cluster weights
     logger.info("[pipeline] scoring %d candidates", len(filtered))
     from .scoring import score_candidates
-    scored = score_candidates(filtered, interest_embs, clusters, params=None)
+    scored = score_candidates(filtered, interest_embs, clusters, params=score_params)
 
     # 3) select top-N by final_score with a simple score_threshold filter
     total_scored = len(scored)
@@ -554,6 +560,7 @@ def run_radar(
     max_items: int,
     json_stdout: bool,
     max_source_items: int = 0,
+    score_params: ScoreParams | None = None,
     source_lang: str | None,
     target_lang: str | None,
 ) -> int:
@@ -583,6 +590,8 @@ def run_radar(
         score_threshold=score_threshold,
         max_items=max_items,
         json_stdout=json_stdout,
+        max_source_items=max_source_items,
+        score_params=score_params,
         source_lang=source_lang,
         target_lang=target_lang,
     )
@@ -647,6 +656,8 @@ def schedule_from_sources_json(
         feed_title = entry.get("feed_title")
         source_lang = entry.get("source_lang")
         target_lang = entry.get("target_lang")
+        w_rec = entry.get("w_recency")
+        w_pop = entry.get("w_popularity")
 
         if not label or not url or interval_hours <= 0:
             logger.warning("[schedule] skip entry with invalid config: %s", entry)
@@ -695,6 +706,19 @@ def schedule_from_sources_json(
             except Exception:
                 score_threshold = 0.0
 
+            from .scoring import load_score_params_from_env
+            base_params = load_score_params_from_env()
+            if w_rec is not None:
+                try:
+                    base_params.w_recency = float(w_rec)
+                except Exception:
+                    pass
+            if w_pop is not None:
+                try:
+                    base_params.w_popularity = float(w_pop)
+                except Exception:
+                    pass
+
             _run_pipeline_for_candidates(
                 root=root,
                 candidates=candidates,
@@ -703,6 +727,8 @@ def schedule_from_sources_json(
                 score_threshold=score_threshold,
                 max_items=max_entries,
                 json_stdout=False,
+                max_source_items=max_source_items,
+                score_params=base_params,
                 source_lang=source_lang,
                 target_lang=target_lang,
             )

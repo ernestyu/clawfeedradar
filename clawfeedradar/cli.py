@@ -130,7 +130,7 @@ def _cmd_run(args) -> int:
     if args.w_popularity is not None:
         base_params.w_popularity = float(args.w_popularity)
 
-    return run_radar(
+    rc = run_radar(
         root=root,
         url=url,
         output_xml=output_xml,
@@ -143,6 +143,11 @@ def _cmd_run(args) -> int:
         source_lang=args.source_lang,
         target_lang=args.target_lang,
     )
+    if rc == 0:
+        print(f"[run] radar completed successfully for URL {url!r}, output={output_xml}")
+    else:
+        print(f"[run] radar exited with code {rc} for URL {url!r}, output={output_xml}")
+    return rc
 
 
 def _cmd_schedule(args) -> int:
@@ -155,11 +160,16 @@ def _cmd_schedule(args) -> int:
     if not output_dir:
         output_dir = os.environ.get("CLAWFEEDRADAR_OUTPUT_DIR", os.path.join(os.getcwd(), "feeds"))
 
-    return schedule_from_sources_json(
+    rc = schedule_from_sources_json(
         root=root,
         sources_json_path=sources_json,
         output_dir=output_dir,
     )
+    if rc == 0:
+        print(f"[schedule] radar schedule completed successfully from {sources_json!r}, output_dir={output_dir}")
+    else:
+        print(f"[schedule] radar schedule exited with code {rc} from {sources_json!r}, output_dir={output_dir}")
+    return rc
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -317,3 +317,75 @@ def generate_bilingual_body(fulltext: str, cfg: SmallLLMConfig) -> str:
         if tgt_text:
             parts.append(tgt_text)
     return "\n\n".join(parts)
+
+
+def generate_tags_bulk(summaries: list[str], cfg: SmallLLMConfig) -> list[str]:
+    """Generate tags for a batch of long summaries using the small LLM.
+
+    - Input: list of long summaries (each ~1200 chars).
+    - Output: list of tag strings (same length; empty string on failure).
+    - Robustness: up to 3 attempts per summary with simple batch retries.
+    """
+    if not summaries:
+        return []
+
+    results: list[str] = ["" for _ in summaries]
+    pending = {i for i, s in enumerate(summaries) if s}
+    max_attempts = 3
+    attempt = 0
+
+    src = cfg.source_lang or "auto"
+    tgt = cfg.target_lang
+
+    # Simple batching heuristic: group up to 16 summaries per LLM call.
+    def _chunks(idxs, n=16):
+        idxs = list(idxs)
+        for i in range(0, len(idxs), n):
+            yield idxs[i:i+n]
+
+    while pending and attempt < max_attempts:
+        attempt += 1
+        current = sorted(pending)
+        for batch in _chunks(current):
+            payload_obj = {
+                "source_lang": src,
+                "target_lang": tgt,
+                "items": [
+                    {"idx": i, "summary": summaries[i]} for i in batch
+                ],
+            }
+            sys_prompt = (
+                "You are a tagging assistant. "
+                "You receive a JSON object with an 'items' array; each item has "
+                "an 'idx' and a 'summary'. For each item, produce a concise tag "
+                "string (comma-separated keywords) that best describes the topic "
+                "of the summary. Return a JSON array of objects of the form "
+                "{\"idx\": int, \"tags\": str}. Do not include any extra text."
+            )
+            user_content = json.dumps(payload_obj, ensure_ascii=False)
+            payload = {
+                "model": cfg.model,
+                "messages": [
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                "max_tokens": cfg.max_output_chars if cfg.max_output_chars > 0 else None,
+            }
+            try:
+                raw = _post_chat(payload, cfg)
+                data = json.loads(raw)
+            except Exception:
+                continue
+
+            if not isinstance(data, list):
+                continue
+
+            for item in data:
+                idx = item.get("idx")
+                tags = item.get("tags")
+                if isinstance(idx, int) and isinstance(tags, str) and idx in pending:
+                    results[idx] = tags.strip()
+                    pending.remove(idx)
+
+    # Any remaining pending summaries fallback to empty tag string.
+    return results

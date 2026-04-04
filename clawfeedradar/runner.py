@@ -317,21 +317,80 @@ def _run_pipeline_for_candidates(
                 url, text = fut.result()
                 fulltexts[url] = text
 
-    texts: list[str] = []
+    # Build long summaries for each candidate
     long_summaries: dict[str, str] = {}
+    summaries_list: list[str] = []
     for c in filtered:
         fulltext = fulltexts.get(c.url, "")
         long_summary = _build_long_summary(fulltext)
         if not long_summary:
             # Fallback: use title + summary if fulltext is unavailable
             long_summary = f"{c.title}\n\n{c.summary}"
-        texts.append(long_summary)
         long_summaries[c.url] = long_summary
+        summaries_list.append(long_summary)
 
-    embs = embed_texts(texts, cfg.embedding)
-    score_params = load_score_params_from_env()
+    # Generate tags for long summaries via small LLM (batch, best-effort)
+    llm_cfg_tags = load_small_llm_config()
+    if llm_cfg_tags is not None:
+        try:
+            from .llm_client import generate_tags_bulk
+        except Exception:
+            llm_cfg_tags = None
+    tags_list: list[str] = ["" for _ in summaries_list]
+    if llm_cfg_tags is not None:
+        try:
+            tags_list = generate_tags_bulk(summaries_list, llm_cfg_tags)
+        except Exception as e:
+            logger.warning("[llm-tag] bulk tag generation failed: %s", e)
+            tags_list = ["" for _ in summaries_list]
+    else:
+        logger.info("[llm-tag] small LLM config missing; skip tag generation")
+
+    # Embed summaries and tags (serial embedding client inside embed_texts)
+    summary_embs = embed_texts(summaries_list, cfg.embedding)
+    tag_embs: list[list[float]] = []
+    for tags in tags_list:
+        if not tags:
+            tag_embs.append([0.0] * cfg.embedding.vec_dim)
+        else:
+            tag_embs.append(embed_text(tags, cfg.embedding))
+
+    # Mix summary/tag embeddings into interest vectors using CLAWSQLITE_INTEREST_TAG_WEIGHT
+    try:
+        w_tag = float(os.environ.get("CLAWSQLITE_INTEREST_TAG_WEIGHT", "0.75") or "0.75")
+    except Exception:
+        w_tag = 0.75
+    if w_tag < 0.0:
+        w_tag = 0.0
+    if w_tag > 1.0:
+        w_tag = 1.0
+    w_sum = 1.0 - w_tag
+
+    interest_embs: list[list[float]] = []
+    for s_emb, t_emb in zip(summary_embs, tag_embs):
+        if not s_emb and not t_emb:
+            interest_embs.append([0.0] * cfg.embedding.vec_dim)
+            continue
+        # If one vector is effectively zero-length, use the other as-is.
+        if all(v == 0.0 for v in s_emb) and any(v != 0.0 for v in t_emb):
+            interest_embs.append(t_emb)
+            continue
+        if all(v == 0.0 for v in t_emb) and any(v != 0.0 for v in s_emb):
+            interest_embs.append(s_emb)
+            continue
+        vec = [0.0] * cfg.embedding.vec_dim
+        if w_sum > 0.0:
+            for i in range(len(vec)):
+                vec[i] += w_sum * s_emb[i]
+        if w_tag > 0.0:
+            for i in range(len(vec)):
+                vec[i] += w_tag * t_emb[i]
+        interest_embs.append(vec)
+
+    # Score candidates using interest embeddings and cluster weights
     logger.info("[pipeline] scoring %d candidates", len(filtered))
-    scored = score_candidates(filtered, embs, clusters, params=score_params)
+    from .scoring import score_candidates
+    scored = score_candidates(filtered, interest_embs, clusters, params=None)
 
     # 3) select top-N by final_score with a simple score_threshold filter
     total_scored = len(scored)

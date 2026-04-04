@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-"""打分与排序（v0）。
+"""打分与排序（v1）。
 
-当前仅实现：
-- 通用兴趣分 Interest Score（基于聚类和 embedding）
-- 源特化通道占位（仅 hackernews 示例）
-- 简单的主线排序（不含探索/多样性配额，后续补充）
+核心设计：
+- interest_score = 对所有兴趣簇的 (cluster_weight * similarity) 求和，
+  其中 cluster_weight = cluster_size / total_articles。
+- final_score 在 interest_score 基础上只做轻度源特化偏置（如 HN 热度）。
 """
 
 from dataclasses import dataclass
@@ -67,34 +67,6 @@ def _recency_weight(published_at: datetime, now: datetime, half_life: float) -> 
     # 指数衰减：越新权重越高
     return 0.5 ** (dt / half_life) if half_life > 0 else 0.0
 
-
-def compute_interest_score(
-    cand: Candidate,
-    emb: List[float],
-    clusters: List[ClusterInfo],
-    params: ScoreParams,
-    *,
-    now: datetime | None = None,
-) -> tuple[float, InterestMatch]:
-    """通用兴趣分：不依赖源特化字段。"""
-
-    now = now or datetime.now(timezone.utc)
-    match = score_against_clusters(emb, clusters)
-    sim_best = match.sim_best
-    sim_second = match.sim_second
-    # 边缘度：靠近第二簇且不被第一簇极端“碾压”
-    border = sim_second * (1.0 - sim_best)
-
-    rec = _recency_weight(cand.published_at, now, params.recency_half_life)
-    pop = max(0.0, min(1.0, cand.popularity_score))
-
-    interest = (
-        params.w_sim_best * sim_best
-        + params.w_sim_second * border
-        + params.w_recency * rec
-        + params.w_popularity * pop
-    )
-    return interest, match
 
 
 # 源特化通道 --------------------------------------------
@@ -157,16 +129,58 @@ def score_candidates(
 ) -> List[ScoredItem]:
     """对一批候选打分并按 final_score 排序（降序）。
 
-    v0：不做簇配额/探索，仅验证 end-to-end 行为。
+    v1: interest_score = sum_k (cluster_weight_k * sim_k),
+        其中 cluster_weight_k = cluster.size / sum_j cluster_j.size。
+    时间和源特化通道仅作轻度偏置，不再参与兴趣主轴。
     """
 
-    params = params or ScoreParams()
+    if not cands or not embs or not clusters:
+        return []
+
+    # 预先计算簇权重：size / total_size
+    total_size = sum(max(1, int(c.size or 0)) for c in clusters)
+    if total_size <= 0:
+        total_size = 1
+    cluster_weights = {c.id: max(1, int(c.size or 0)) / total_size for c in clusters}
+
+    params = params or load_score_params_from_env()
     now = datetime.now(timezone.utc)
     out: List[ScoredItem] = []
 
+    # 为每个候选计算 interest_score
     for cand, emb in zip(cands, embs):
-        interest, match = compute_interest_score(cand, emb, clusters, params, now=now)
-        final = compute_final_score(cand, interest)
+        # 与所有簇计算相似度，并按簇权重加权求和
+        from .sqlite_interest import _cosine_sim
+
+        total = 0.0
+        best_cluster_id = -1
+        best_sim = 0.0
+        second_sim = 0.0
+        for c in clusters:
+            sim = _cosine_sim(emb, c.centroid)
+            if sim < 0.0:
+                sim = 0.0
+            w = cluster_weights.get(c.id, 0.0)
+            total += w * sim
+            # 跟踪 best/second 仅用于日志和可解释性
+            if sim > best_sim:
+                second_sim = best_sim
+                best_sim = sim
+                best_cluster_id = c.id
+            elif sim > second_sim:
+                second_sim = sim
+
+        interest = float(total)
+        match = InterestMatch(best_cluster_id=best_cluster_id, sim_best=best_sim, sim_second=second_sim)
+
+        # 时间与源特化作为轻度偏置
+        rec = _recency_weight(cand.published_at, now, params.recency_half_life)
+        pop = max(0.0, min(1.0, cand.popularity_score))
+        # 这里给 recency/popularity 较小权重，确保兴趣主轴主导排序
+        interest_bias = (params.w_recency * rec + params.w_popularity * pop)
+        biased_interest = interest + interest_bias
+
+        final = compute_final_score(cand, biased_interest)
         out.append(ScoredItem(candidate=cand, interest_score=interest, final_score=final, match=match))
 
     out.sort(key=lambda x: x.final_score, reverse=True)

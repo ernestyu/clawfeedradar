@@ -21,7 +21,6 @@ class SmallLLMConfig:
     base_url: str
     model: str
     api_key: str
-    max_output_chars: int
     sleep_between_ms: int
     source_lang: str  # e.g. "auto", "en"
     target_lang: str  # e.g. "zh"
@@ -46,7 +45,6 @@ def load_small_llm_config(
             pass
         return default
 
-    max_out = _int_env("CLAWFEEDRADAR_LLM_MAX_OUTPUT_CHARS", 12000)
     sleep_ms = _int_env("CLAWFEEDRADAR_LLM_SLEEP_BETWEEN_MS", 500)
 
     # Language hints: env defaults, CLI overrides
@@ -140,7 +138,7 @@ def generate_preview_summary(long_summary: str, cfg: SmallLLMConfig) -> str:
         "You are a concise summarization assistant. "
         "Given an article summary, produce a short summary ONLY in the "
         "target language (no other languages). "
-        "Keep it around 400-600 characters. "
+        f"Aim for roughly {preview_words} words in the target language. "
         f"Source language hint: {src}. Target language: {tgt}."
     )
 

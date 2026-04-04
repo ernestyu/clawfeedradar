@@ -84,6 +84,8 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--source-lang", help="source language hint for LLM (e.g. en, auto by default)")
     rp.add_argument("--target-lang", help="target language for summaries/translation (e.g. zh)")
     rp.add_argument("--no-preview", action="store_true", help="disable preview summary LLM (debug/fast mode)")
+    rp.add_argument("--preview-words", type=int, default=None, help="target length for preview summary in words (run mode)")
+    rp.add_argument("--no-preview", action="store_true", help="disable preview summary LLM (debug/fast mode)")
     rp.add_argument("--json", action="store_true", help="also print selected items as JSON to stdout")
     rp.set_defaults(func=_cmd_run)
 
@@ -124,6 +126,12 @@ def _cmd_run(args) -> int:
     else:
         max_source_items = 0
 
+    # preview target length (words) for this run; default 512 if not specified
+    if args.preview_words is not None and args.preview_words > 0:
+        preview_words = int(args.preview_words)
+    else:
+        preview_words = 512
+
     from .scoring import load_score_params_from_env, ScoreParams
     base_params = load_score_params_from_env()
     if args.w_recency is not None:
@@ -144,6 +152,7 @@ def _cmd_run(args) -> int:
         source_lang=args.source_lang,
         target_lang=args.target_lang,
         enable_preview=not bool(args.no_preview),
+        preview_words=preview_words,
     )
     if rc == 0:
         print(f"[run] radar completed successfully for URL {url!r}, output={output_xml}")

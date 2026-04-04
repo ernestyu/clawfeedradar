@@ -199,6 +199,7 @@ def _run_pipeline_for_candidates(
     source_lang: str | None,
     target_lang: str | None,
     enable_preview: bool = True,
+    preview_words: int = 512,
 ) -> int:
     """Core radar pipeline given an explicit candidate list.
 
@@ -578,6 +579,7 @@ def run_radar(
     source_lang: str | None,
     target_lang: str | None,
     enable_preview: bool = True,
+    preview_words: int = 512,
 ) -> int:
     """Run radar for a single source URL.
 
@@ -610,6 +612,7 @@ def run_radar(
         source_lang=source_lang,
         target_lang=target_lang,
         enable_preview=enable_preview,
+        preview_words=preview_words,
     )
 
 
@@ -674,6 +677,7 @@ def schedule_from_sources_json(
         target_lang = entry.get("target_lang")
         w_rec = entry.get("w_recency")
         w_pop = entry.get("w_popularity")
+        preview_words = int(entry.get("preview_words") or 512)
 
         if not label or not url or interval_hours <= 0:
             logger.warning("[schedule] skip entry with invalid config: %s", entry)
@@ -747,6 +751,8 @@ def schedule_from_sources_json(
                 score_params=base_params,
                 source_lang=source_lang,
                 target_lang=target_lang,
+                enable_preview=True,
+                preview_words=preview_words,
             )
             entry["last_success_at"] = now.isoformat()
             entry["last_error"] = None

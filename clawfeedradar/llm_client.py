@@ -155,7 +155,7 @@ def generate_preview_summary(long_summary: str, cfg: SmallLLMConfig) -> str:
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "max_tokens": cfg.max_output_chars // 3 if cfg.max_output_chars > 0 else None,
+        # Let the server decide max_tokens; input is already chunked by context budget.
     }
 
     return _post_chat(payload, cfg)
@@ -301,7 +301,7 @@ def generate_bilingual_body(fulltext: str, cfg: SmallLLMConfig) -> str:
                     {"role": "system", "content": sys_prompt},
                     {"role": "user", "content": user_content},
                 ],
-                "max_tokens": cfg.max_output_chars if cfg.max_output_chars > 0 else None,
+                # max_tokens omitted; we control input size via CLAWFEEDRADAR_LLM_CONTEXT_CHARS.
             }
 
             try:
@@ -423,7 +423,7 @@ def generate_tags_bulk(summaries: list[str], cfg: SmallLLMConfig) -> list[str]:
                     {"role": "system", "content": sys_prompt},
                     {"role": "user", "content": user_content},
                 ],
-                "max_tokens": cfg.max_output_chars if cfg.max_output_chars > 0 else None,
+                # max_tokens omitted; we control input size via CLAWFEEDRADAR_LLM_CONTEXT_CHARS.
             }
             try:
                 raw = _post_chat(payload, cfg)

@@ -58,6 +58,13 @@ def fetch_candidates_from_rss(source_url: str, *, max_items: int = 100) -> List[
     d = feedparser.parse(source_url)
     entries = d.entries or []
 
+    # Infer coarse source type from feed URL (hnrss/arxiv/etc.).
+    try:
+        feed_host = urlparse(source_url).netloc.lower()
+    except Exception:
+        feed_host = ""
+    is_hn_feed = "hnrss.org" in feed_host or "news.ycombinator.com" in feed_host
+
     out: List[Candidate] = []
     for e in entries[:max_items]:
         link = getattr(e, "link", None) or ""
@@ -74,7 +81,10 @@ def fetch_candidates_from_rss(source_url: str, *, max_items: int = 100) -> List[
                 tags_list.append(str(term))
         tags = ",".join(tags_list)
 
-        source = _infer_source_from_link(link)
+        if is_hn_feed:
+            source = "hackernews"
+        else:
+            source = _infer_source_from_link(link)
         published_at = _parse_datetime(e)
 
         # Popularity: source-specific best-effort signals, fallback to neutral 0.5

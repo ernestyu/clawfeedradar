@@ -479,8 +479,6 @@ def _run_pipeline_for_candidates(
                 "interest_score": item.interest_score,
                 "final_score": item.final_score,
                 "best_cluster_id": item.match.best_cluster_id,
-                "sim_best": item.match.sim_best,
-                "sim_second": item.match.sim_second,
                 "fulltext": row["fulltext"],
                 "summary_preview": row["summary_preview"],
                 "body_bilingual": row["body_bilingual"],

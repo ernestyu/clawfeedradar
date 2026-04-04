@@ -233,7 +233,8 @@ def _run_pipeline_for_candidates(
         raise RuntimeError("No interest_clusters found; run 'clawsqlite knowledge build-interest-clusters' first")
 
     if not candidates:
-        raise RuntimeError("No candidates provided to radar pipeline")
+        logger.info("[pipeline] no candidates fetched from source; exiting")
+        return 0
 
     # Load global seen-URL state (7-day window)
     state_path = Path.cwd() / "state" / "seen_urls.json"

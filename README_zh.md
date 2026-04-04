@@ -130,4 +130,73 @@ python -m clawfeedradar.cli run \
 
 ---
 
-（后续章节与英文 README.md 对应，描述当前 v1 的打分、LLM 和 CLI 行为，这里不重复粘贴。）
+## 通过 Git 发布 feeds（GitHub Pages / Gitee Pages）
+
+clawfeedradar 在写完本地 XML/JSON 后，可以选择性地将这些文件 push 到一个 git 仓库，
+配合 GitHub Pages 或 Gitee Pages 免费托管你的 RSS feed。
+
+### 1）GitHub Pages 示例
+
+1. 在 GitHub 上创建一个公开仓库，例如：`github.com/yourname/clawfeedradar-feed`，
+   在 Settings → Pages 中启用 Pages 功能，选择：
+
+   - Branch：`gh-pages`
+   - Directory：`/` 或 `feeds/`（下面示例使用 `feeds/`）
+
+2. 在运行 clawfeedradar 的环境中，配置好访问 GitHub 的 git 认证：
+
+   - SSH URL：配置好 `git@github.com` 的 SSH key；
+   - 或 HTTPS URL：配置好 PAT / credential helper。
+
+3. 在 `.env` 中添加：
+
+   ```env
+   CLAWFEEDRADAR_PUBLISH_GIT_REPO=git@github.com:yourname/clawfeedradar-feed.git
+   CLAWFEEDRADAR_PUBLISH_GIT_BRANCH=gh-pages
+   CLAWFEEDRADAR_PUBLISH_GIT_PATH=feeds
+   ```
+
+4. 之后每次运行 `clawfeedradar run` / `schedule`：
+
+   - clawfeedradar 会在本地 `./.publish/yourname-clawfeedradar-feed/` 下维护一个 clone；
+   - 把生成的 `*.xml` / `*.json` 拷贝到该 clone 的 `feeds/` 目录；
+   - 自动执行 `git add` / `git commit` / `git push`。
+
+5. 最终订阅地址类似于：
+
+   ```text
+   https://yourname.github.io/clawfeedradar-feed/feeds/bbc-tech.xml
+   ```
+
+### 2）Gitee Pages 示例（适合国内网络）
+
+对 Gitee，流程几乎一样，只是远端换成 `gitee.com`：
+
+1. 在 Gitee 上创建一个仓库，例如：`gitee.com/yourname/clawfeedradar-feed`，
+   在 Gitee Pages 设置里启用 Pages，并选择合适的分支/目录（例如 `gh-pages` / `feeds/`）。
+
+2. 在运行环境中配置好访问 `git@gitee.com:...` 的 SSH key。
+
+3. 在 `.env` 中添加：
+
+   ```env
+   CLAWFEEDRADAR_PUBLISH_GIT_REPO=git@gitee.com:yourname/clawfeedradar-feed.git
+   CLAWFEEDRADAR_PUBLISH_GIT_BRANCH=gh-pages
+   CLAWFEEDRADAR_PUBLISH_GIT_PATH=feeds
+   ```
+
+4. 之后 clawfeedradar 的行为与 GitHub 情况一致：每次生成 XML/JSON 后自动
+   `git add` / `commit` / `push` 到 Gitee 仓库。
+
+5. Gitee Pages 的订阅地址通常类似：
+
+   ```text
+   https://yourname.gitee.io/clawfeedradar-feed/feeds/bbc-tech.xml
+   ```
+
+如果未配置 `CLAWFEEDRADAR_PUBLISH_GIT_REPO`，clawfeedradar 只会在本地写 XML/JSON，
+不会尝试推送远端仓库。
+
+---
+
+（其余章节与英文 README.md 对应，主要是打分/LLM/CLI 行为，这里不重复。）

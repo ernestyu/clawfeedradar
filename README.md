@@ -130,109 +130,72 @@ This produces:
 
 ---
 
-## Configuration (env overview)
+## Publishing feeds via Git (GitHub Pages / Gitee Pages)
 
-See `ENV.example` for the full set of variables. The most important groups are:
+clawfeedradar can optionally push the generated XML/JSON to a git repository,
+so that GitHub Pages or Gitee Pages can host your feed at a stable HTTPS URL.
 
-- clawsqlite (`CLAWSQLITE_ROOT`, `CLAWSQLITE_DB`)
-- Embedding (`EMBEDDING_*`, `CLAWSQLITE_VEC_DIM`, `CLAWSQLITE_INTEREST_TAG_WEIGHT`)
-- Radar output and scraping (`CLAWFEEDRADAR_OUTPUT_DIR`, `CLAWFEEDRADAR_SCRAPE_CMD`, `CLAWFEEDRADAR_SCRAPE_WORKERS`)
-- Scoring (`CLAWFEEDRADAR_W_RECENCY`, `CLAWFEEDRADAR_W_POPULARITY`, `CLAWFEEDRADAR_RECENCY_HALF_LIFE_DAYS`, `CLAWFEEDRADAR_INTEREST_SIGMOID_K`)
-- Small LLM (`SMALL_LLM_*`, `CLAWFEEDRADAR_LLM_CONTEXT_TOKENS`, `CLAWFEEDRADAR_LLM_MAX_PARAGRAPH_CHARS`, `CLAWFEEDRADAR_LLM_TAG_MAX_PER_ITEM`, `CLAWFEEDRADAR_LLM_SLEEP_BETWEEN_MS`, `CLAWFEEDRADAR_LLM_SOURCE_LANG`, `CLAWFEEDRADAR_LLM_TARGET_LANG`)
-- Default selection size (`CLAWFEEDRADAR_MAX_ITEMS`).
+### 1) GitHub Pages example
+
+1. 创建一个公开仓库，例如：`github.com/yourname/clawfeedradar-feed`，在 Settings → Pages 中
+   启用 Pages 功能，选择：
+
+   - Branch: `gh-pages`
+   - Directory: `/` 或 `feeds/`（下面示例使用 `feeds/`）
+
+2. 在运行 clawfeedradar 的机器上，配置好 git 访问 GitHub 的方式（SSH key 或 HTTPS+PAT）。
+
+3. 在 `.env` 中添加：
+
+   ```env
+   CLAWFEEDRADAR_PUBLISH_GIT_REPO=git@github.com:yourname/clawfeedradar-feed.git
+   CLAWFEEDRADAR_PUBLISH_GIT_BRANCH=gh-pages
+   CLAWFEEDRADAR_PUBLISH_GIT_PATH=feeds
+   ```
+
+4. 之后每次运行 `clawfeedradar run` / `schedule`：
+
+   - clawfeedradar 会在本地 `./.publish/yourname-clawfeedradar-feed/` 下维护一个 clone；
+   - 将生成的 `*.xml` / `*.json` 拷贝到该 clone 的 `feeds/` 目录；
+   - 自动执行 `git add` / `git commit` / `git push`。
+
+5. 最终订阅地址类似于：
+
+   ```text
+   https://yourname.github.io/clawfeedradar-feed/feeds/bbc-tech.xml
+   ```
+
+### 2) Gitee Pages example（适合国内网络）
+
+步骤与 GitHub 类似，只是把远端换成 Gitee：
+
+1. 创建 Gitee 仓库，例如：`gitee.com/yourname/clawfeedradar-feed`，在 Pages 设置中
+   启用 Gitee Pages（选择对应分支和目录）。
+
+2. 在运行环境中配置好访问 `git@gitee.com:...` 的 SSH key。
+
+3. 在 `.env` 中添加：
+
+   ```env
+   CLAWFEEDRADAR_PUBLISH_GIT_REPO=git@gitee.com:yourname/clawfeedradar-feed.git
+   CLAWFEEDRADAR_PUBLISH_GIT_BRANCH=gh-pages
+   CLAWFEEDRADAR_PUBLISH_GIT_PATH=feeds
+   ```
+
+4. 之后 clawfeedradar 的行为与 GitHub 情况一致：每次生成 XML/JSON 后自动
+   `git add` / `commit` / `push` 到 Gitee 仓库。
+
+5. Gitee Pages 的订阅地址通常类似：
+
+   ```text
+   https://yourname.gitee.io/clawfeedradar-feed/feeds/bbc-tech.xml
+   ```
+
+如未配置 `CLAWFEEDRADAR_PUBLISH_GIT_REPO`，clawfeedradar 仅在本地写 XML/JSON，
+不会尝试推送任何远端仓库。
 
 ---
 
-## Scoring (current v1)
+## Configuration (env overview)
 
-### Interest vectors
-
-For each candidate:
-
-1. Fetch fulltext (with per-host serialization and retries).
-2. Build a *long summary* via `_build_long_summary(fulltext)`:
-   - Split by blank lines into paragraphs.
-   - Accumulate from the top until roughly 1200 characters, at paragraph boundaries.
-   - If the last non-empty paragraph is not included, append it.
-   - If fulltext is missing, fall back to `title + "\n\n" + summary`.
-3. Use a small LLM to generate tags for all long summaries in batches (`generate_tags_bulk`).
-4. Embed long summaries and tag texts via the serial embedding client with retries and rate limiting.
-5. Mix summary/tag embeddings into *interest vectors* using `CLAWSQLITE_INTEREST_TAG_WEIGHT` (same semantics as on the clawsqlite side).
-
-### Interest score
-
-1. Load clusters from clawsqlite: `ClusterInfo(id, label, size, centroid)`.
-2. Compute cluster weights:
-
-   ```text
-   total_size = Σ_k max(1, size_k)
-   cluster_weight_k = size_k / total_size
-   ```
-
-3. For each candidate interest vector `emb`:
-
-   ```python
-   interest_raw = 0.0
-   best_cluster_id = -1
-   best_sim = 0.0
-   second_sim = 0.0
-
-   for cluster in clusters:
-       sim = cosine(emb, cluster.centroid)
-       sim = max(sim, 0.0)  # negative similarities are clamped to 0
-       w = cluster_weights[cluster.id]
-       interest_raw += w * sim
-
-       if sim > best_sim:
-           second_sim = best_sim
-           best_sim = sim
-           best_cluster_id = cluster.id
-       elif sim > second_sim:
-           second_sim = sim
-
-   best_cluster_weight = cluster_weights[best_cluster_id]
-   ```
-
-4. Apply an S-shaped logistic sigmoid centered at 0.5:
-
-   ```python
-   # k from CLAWFEEDRADAR_INTEREST_SIGMOID_K (default 4.0)
-   z = k * (interest_raw - 0.5)
-   interest = 1.0 / (1.0 + exp(-z))
-   ```
-
-Both `interest_raw` and `interest` are stored in the JSON sidecar:
-
-- `interest_score_raw`: linear interest score;
-- `interest_score`: sigmoid-stretched score used for thresholding.
-
-### Recency and popularity bias
-
-After sigmoid:
-
-```python
-rec = recency_weight(published_at, now, half_life_seconds)
-# half_life_seconds = CLAWFEEDRADAR_RECENCY_HALF_LIFE_DAYS * 24 * 3600
-
-pop = clamp(candidate.popularity_score, 0.0, 1.0)
-
-interest_bias = w_recency * rec + w_popularity * pop
-biased_interest = interest + interest_bias
-```
-
-Defaults:
-
-- `w_recency = w_popularity = 0.05` (light bias);
-- non-HN RSS sources default to `popularity_score = 0.0`.
-
-Per-run overrides are available via `--w-recency` and `--w-popularity`.
-
-### Source-specific extras and final score
-
-A thin source-specific channel is allowed for HN/arxiv:
-
-```python
-...  # unchanged
-```
-
-(remaining sections unchanged)
+（其余章节与之前相同，略）

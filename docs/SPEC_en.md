@@ -447,5 +447,56 @@ Scheduling behavior:
 
 ---
 
-This SPEC reflects the current implementation of clawfeedradar.
-If new scoring/LLM behaviors are added, this file should be kept in sync to avoid mixing v0/v1 designs.
+## 9. Publishing feeds via Git (GitHub Pages / Gitee Pages)
+
+clawfeedradar can optionally push the generated XML/JSON to a git repository,
+so that GitHub Pages or Gitee Pages can host your feed at a stable HTTPS URL.
+
+### 9.1 Configuration
+
+Set the following env vars in your `.env`:
+
+```env
+CLAWFEEDRADAR_PUBLISH_GIT_REPO=git@github.com:yourname/clawfeedradar-feed.git
+CLAWFEEDRADAR_PUBLISH_GIT_BRANCH=gh-pages
+CLAWFEEDRADAR_PUBLISH_GIT_PATH=feeds
+```
+
+or for Gitee:
+
+```env
+CLAWFEEDRADAR_PUBLISH_GIT_REPO=git@gitee.com:yourname/clawfeedradar-feed.git
+CLAWFEEDRADAR_PUBLISH_GIT_BRANCH=gh-pages
+CLAWFEEDRADAR_PUBLISH_GIT_PATH=feeds
+```
+
+Requirements:
+
+- The repo must exist and be accessible via git (SSH or HTTPS with credentials).
+- On GitHub/Gitee, enable Pages for this repo and point it to the chosen
+  branch/path (e.g. `gh-pages` / `feeds/`).
+- Ensure the environment has git installed and proper authentication:
+  - SSH keys configured for `git@github.com` or `git@gitee.com`, or
+  - a credential helper for HTTPS.
+
+### 9.2 Behavior
+
+After each successful pipeline run (`run` or `schedule`), clawfeedradar will:
+
+1. Clone (or reuse) the configured repo under `./.publish/<slug>/`.
+2. Checkout the configured branch, creating it if needed.
+3. Copy the generated `*.xml` and `*.json` into `<repo>/<PATH>/`.
+4. Run `git add`, `git commit` (ignored if nothing changed), and `git push`.
+
+If publishing is not configured (no `CLAWFEEDRADAR_PUBLISH_GIT_REPO`) it does nothing.
+
+On failures (clone/checkout/push), it:
+
+- Prints a `[error] ...` message to stdout with a suggested next action;
+- Logs the error via the `clawfeedradar` logger;
+- Returns a non-zero exit code from the publish step, but **does not crash the
+  main scoring pipeline** (the run still succeeds locally; only remote publish fails).
+
+This makes it easy to use GitHub Pages or Gitee Pages as a free, static host
+for your RSS feeds, while keeping clawfeedradar's core behavior independent
+of any specific provider.

@@ -87,8 +87,9 @@ def fetch_candidates_from_rss(source_url: str, *, max_items: int = 100) -> List[
             source = _infer_source_from_link(link)
         published_at = _parse_datetime(e)
 
-        # Popularity: source-specific best-effort signals, fallback to neutral 0.5
-        pop = 0.5
+        # Popularity: source-specific best-effort signals.
+        # For sources without explicit popularity (non-HN), use 0.0 instead of a fake neutral 0.5.
+        pop = 0.0
         hn_points = None
         hn_comments = None
         if source == "hackernews":

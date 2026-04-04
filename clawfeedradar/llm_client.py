@@ -268,7 +268,17 @@ def generate_bilingual_body(fulltext: str, cfg: SmallLLMConfig) -> str:
     while pending and attempt < max_attempts:
         attempt += 1
         to_process = [(idx, screen_segments[idx]) for idx in sorted(pending)]
-        chunks = _group_by_chars(to_process, 10000)
+        try:
+            context_chars = int(os.environ.get("CLAWFEEDRADAR_LLM_CONTEXT_CHARS", "8000") or "8000")
+        except Exception:
+            context_chars = 8000
+        if context_chars <= 0:
+            context_chars = 8000
+        # Use ~40%% of context budget for input paragraphs, leaving room for output.
+        input_budget = int(context_chars * 0.4)
+        if input_budget <= 0:
+            input_budget = context_chars
+        chunks = _group_by_chars(to_process, input_budget)
 
         for chunk in chunks:
             payload_obj = {
@@ -337,13 +347,13 @@ def generate_tags_bulk(summaries: list[str], cfg: SmallLLMConfig) -> list[str]:
     src = cfg.source_lang or "auto"
     tgt = cfg.target_lang
 
-    # Batch size for tag generation: controlled by env, default 4 per call.
+    # LLM context budget (approximate, in characters) for tag generation input.
     try:
-        max_items_per_call = int(os.environ.get("CLAWFEEDRADAR_LLM_TAG_MAX_ITEMS_PER_CALL", "4") or "4")
+        context_chars = int(os.environ.get("CLAWFEEDRADAR_LLM_CONTEXT_CHARS", "8000") or "8000")
     except Exception:
-        max_items_per_call = 4
-    if max_items_per_call <= 0:
-        max_items_per_call = 1
+        context_chars = 8000
+    if context_chars <= 0:
+        context_chars = 8000
 
     # Max tags per item (informational hint in the prompt), default 8.
     try:
@@ -353,7 +363,35 @@ def generate_tags_bulk(summaries: list[str], cfg: SmallLLMConfig) -> list[str]:
     if max_tags_per_item <= 0:
         max_tags_per_item = 1
 
-    def _chunks(idxs, n=max_items_per_call):
+    # Chunk indices by rough character budget on input side.
+    def _chunks(idxs, n_unused=None):
+        chunks = []
+        cur = []
+        total = 0
+        # Use ~80% of context budget for input summaries (rest for output/prompt).
+        input_budget = int(context_chars * 0.8)
+        if input_budget <= 0:
+            input_budget = context_chars
+        for i in idxs:
+            s = summaries[i]
+            plen = len(s)
+            # If single summary exceeds budget, put it alone.
+            if plen > input_budget:
+                if cur:
+                    chunks.append(cur)
+                    cur = []
+                    total = 0
+                chunks.append([i])
+                continue
+            if cur and total + plen + 2 > input_budget:
+                chunks.append(cur)
+                cur = []
+                total = 0
+            cur.append(i)
+            total += plen + 2
+        if cur:
+            chunks.append(cur)
+        return chunks
         idxs = list(idxs)
         for i in range(0, len(idxs), n):
             yield idxs[i:i+n]

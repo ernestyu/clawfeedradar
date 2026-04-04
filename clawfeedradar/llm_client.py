@@ -65,7 +65,6 @@ def load_small_llm_config(
         base_url=base_url,
         model=model,
         api_key=api_key,
-        max_output_chars=max_out,
         sleep_between_ms=sleep_ms,
         source_lang=src_lang,
         target_lang=tgt_lang,

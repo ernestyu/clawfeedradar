@@ -418,6 +418,19 @@ def _run_pipeline_for_candidates(
 
     # 4) optional: LLM summaries (serial, best-effort)
     llm_cfg = load_small_llm_config(source_lang_override=source_lang, target_lang_override=target_lang)
+    # If source_lang and target_lang are identical, skip all LLM calls entirely
+    # (user can achieve "no translation" by setting them equal).
+    skip_llm = False
+    if llm_cfg is not None:
+        try:
+            src_lang = (llm_cfg.source_lang or "").strip()
+            tgt_lang = (llm_cfg.target_lang or "").strip()
+            if src_lang and tgt_lang and src_lang.lower() == tgt_lang.lower():
+                skip_llm = True
+                logger.info("[llm] source_lang == target_lang (%s); skipping preview and bilingual LLM calls", src_lang)
+        except Exception:
+            skip_llm = False
+
     enriched: list[dict] = []
     for item in selected:
         c = item.candidate
@@ -428,7 +441,7 @@ def _run_pipeline_for_candidates(
             fulltext = fetch_fulltext(c.url) or ""
         summary_preview = ""
         body_bilingual = ""
-        if fulltext and llm_cfg is not None:
+        if fulltext and llm_cfg is not None and not skip_llm:
             long_summary = long_summaries.get(c.url, "")
             # 先生成预览摘要
             try:

@@ -143,6 +143,16 @@ def score_candidates(
         total_size = 1
     cluster_weights = {c.id: max(1, int(c.size or 0)) / total_size for c in clusters}
 
+    # Optional non-linear stretching of interest_score to improve thresholding.
+    # CLAWFEEDRADAR_INTEREST_GAMMA > 1.0 will push scores towards 0 and 1 (monotonic transform).
+    import math
+    try:
+        gamma = float(os.environ.get("CLAWFEEDRADAR_INTEREST_GAMMA", "1.0") or "1.0")
+    except Exception:
+        gamma = 1.0
+    if gamma <= 0.0:
+        gamma = 1.0
+
     params = params or load_score_params_from_env()
     now = datetime.now(timezone.utc)
     out: List[ScoredItem] = []
@@ -171,6 +181,9 @@ def score_candidates(
                 second_sim = sim
 
         interest = float(total)
+        # Apply optional non-linear stretching: interest_nl = interest ** gamma
+        if gamma != 1.0:
+            interest = interest ** gamma
         match = InterestMatch(best_cluster_id=best_cluster_id, sim_best=best_sim, sim_second=second_sim)
 
         # 时间与源特化作为轻度偏置

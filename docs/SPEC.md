@@ -1,165 +1,90 @@
-# clawfeedradar 规格说明（v0）
+# clawfeedradar 规格说明（v1）
 
-本文件将当前讨论达成一致的设计固化为更偏“规格”的形式，供后续实现与 review 使用。
+> 本文件描述 **当前实现版本**（基于 `bot/20260402-embedding` 分支）的核心规格。
+> 老的 v0 设计（`W_SIM_BEST` / `border` / `sources.txt` 等）已经废弃，仅保留在 git 历史中，如需考古请查旧版本。
 
-> 范围：仅覆盖 v0（单用户、基于已有 clawsqlite-knowledge 知识库、输出 RSS/XML+JSON）。
+范围：
 
----
-
-## 1. 目标与范围
-
-### 1.1 目标
-
-- 基于现有 `clawsqlite-knowledge` 知识库，构建个人“兴趣空间”。
-- 定期从多个信息源（Hacker News / arXiv / RSS / 其它）抓取文章候选。
-- 对候选进行**兴趣打分 + 多样性控制 + 适度探索**，生成可订阅的技术/论文“读报” feed：
-  - 输出 RSS/Atom XML（供 RSS 阅读器订阅）；
-  - 同时输出一份 JSON（便于调试或其它应用复用）。
-
-### 1.2 非目标
-
-- 不做多用户推荐系统，所有逻辑针对“单用户 + 单知识库”。
-- 不在 clawfeedradar 内重复实现整套向量管理/聚类逻辑：
-  - Embedding / vec 表 / 兴趣簇维护由 `clawsqlite` 提供；
-  - 雷达只消费这些信息做打分与排序。
+- 单用户、基于已有 `clawsqlite` 知识库（interest_clusters）
+- 从 HN / RSS / 其它源抓取候选
+- 基于兴趣簇 + 时间 + 热度打分
+- 输出 per-source 的 RSS XML + JSON
+- 中英/多语 LLM 摘要 + 对译（可关闭）
 
 ---
 
-## 2. 系统分层与责任边界
+## 1. 总体目标
+
+- 让 `clawsqlite` 维护的兴趣簇成为个人“兴趣空间”的唯一来源；
+- clawfeedradar 仅负责：抓数据 → 统一候选模型 → 对照兴趣空间打分 → 输出可订阅 feed；
+- 打分逻辑 **可解释**、**可调参**、**失败可恢复**，避免 pipeline 因为单点异常崩溃。
+
+
+## 2. 与 clawsqlite 的边界
 
 ### 2.1 clawsqlite 侧（知识库 + 兴趣簇）
 
-主职责：**维护知识库 + 向量 + 兴趣簇元数据**。
+由 `clawsqlite knowledge build-interest-clusters` 负责：
 
-当前设计/实现（分支 `bot/20260328-interest-clusters`）：
+- 从 `articles` / `articles_vec` / `articles_tag_vec` 读出文章向量；
+- 使用环境变量 `CLAWSQLITE_INTEREST_TAG_WEIGHT`（默认 0.75）将摘要向量和标签向量线性混合：
 
-1. 向量表：
-   - `articles_vec(id, embedding)`：摘要向量（summary embedding）；
-   - `articles_tag_vec(id, embedding)`：标签向量（tags embedding）。
+  ```text
+  v_interest = (1 - w_tag) * v_summary + w_tag * v_tag
+  ```
 
-2. 兴趣簇聚类命令：
+- 基于混合向量做 k-means + 合并小簇，写入：
+  - `interest_clusters(id, label, size, centroid, ...)`
+  - `interest_cluster_members(cluster_id, article_id, ...)`
+- 成功构建后，向 `interest_meta` 写入：
+  - `key='interest_clusters_last_built_at', value=<UTC ISO8601>`
 
-   ```bash
-   clawsqlite knowledge build-interest-clusters \
-     --root /path/to/knowledge_data \
-     --min-size 5 \
-     --max-clusters 64 \
-     [--json]
-   ```
+clawfeedradar 只读：
 
-   行为：
+- `interest_clusters`（簇中心 + size）；
+- `interest_meta`（用于提示簇是否过期）。
 
-   - 从 `articles` / `articles_vec` / `articles_tag_vec` 中选取候选：
+### 2.2 clawfeedradar 侧
 
-     ```sql
-     SELECT a.id AS id,
-            sv.embedding AS summary_embedding,
-            tv.embedding AS tag_embedding
-     FROM articles a
-     LEFT JOIN articles_vec sv      ON sv.id = a.id
-     LEFT JOIN articles_tag_vec tv  ON tv.id = a.id
-     WHERE a.deleted_at IS NULL
-       AND a.summary IS NOT NULL AND trim(a.summary) != ''
-     ```
+职责：
 
-   - 将 summary/tag 向量按权重混合成“兴趣向量”：
+1. 从外部源拉取候选，统一为 `Candidate`；
+2. 把候选映射到 clawsqlite 兴趣空间，计算兴趣向量；
+3. 对所有候选打分（兴趣主通道 + 时间/热度偏置 + 源特化通道）；
+4. 选出 top-N，抓全文 + LLM 摘要/对译，输出 XML + JSON。
 
-     ```text
-     v_interest = w_sum * summary_vec + w_tag * tag_vec
-     ```
+clawfeedradar **不修改** clawsqlite DB schema，只依赖：
 
-     其中：
+- `CLAWSQLITE_ROOT` / `CLAWSQLITE_DB`；
+- `EMBEDDING_*` / `CLAWSQLITE_VEC_DIM`；
+- `interest_clusters` / `interest_meta`。
 
-     - `w_tag` 从环境变量 `CLAWSQLITE_INTEREST_TAG_WEIGHT` 读取，默认值为 `0.75`；
-     - `w_tag` 被 clamp 在 `[0,1]`；
-     - `w_sum = 1 - w_tag`；
-     - 若仅有其中一个向量存在，则直接使用该向量作为 `v_interest`。
-
-   - 使用纯 Python k-means 对 `v_interest` 做聚类：
-     - 不引入 numpy / sklearn 等三方依赖；
-     - 点集规模假定在“几百到几千”级别；
-   - 聚类粒度由 `min_size` / `max_clusters` 控制：
-     - `max_by_size = n // min_size` 给出在最小簇大小约束下的最大簇数；
-     - 实际 `k = min(max_clusters, max_by_size)`，特殊情况退化为 `k=1`；
-     - 将簇大小 < `min_size` 的“小簇”成员重分配到最近的大簇中心中；
-     - 最终每个兴趣簇至少有 `min_size` 条样本（除非全体样本不足）。
-
-   - 输出表：
-     - `interest_clusters`：
-
-       ```sql
-       CREATE TABLE IF NOT EXISTS interest_clusters (
-         id INTEGER PRIMARY KEY,
-         label TEXT,
-         size INTEGER NOT NULL,
-         summary_centroid BLOB NOT NULL,
-         created_at TEXT NOT NULL,
-         updated_at TEXT NOT NULL
-       );
-       ```
-
-       - `summary_centroid` 存储兴趣簇中心向量（使用 vec_dim 的 float32 blob，与 Embedding 一致）。
-
-     - `interest_cluster_members`：
-
-       ```sql
-       CREATE TABLE IF NOT EXISTS interest_cluster_members (
-         cluster_id INTEGER NOT NULL,
-         article_id INTEGER NOT NULL,
-         membership REAL NOT NULL,
-         PRIMARY KEY (cluster_id, article_id)
-       );
-       ```
-
-       - v0 中 `membership` 固定为 1.0，保留未来编码距离/权重的空间。
-
-> `build-interest-clusters` 属于可选能力：只有显式调用时才会创建 interest_* 表，不影响已有 ingest/search 行为。
-
-### 2.2 clawfeedradar 侧（本项目）
-
-主职责：**数据源拉取 + 候选统一化 + 打分 + 输出 RSS/XML+JSON**。
-
-- 只读 `knowledge.sqlite3`：
-  - `interest_clusters` / `interest_cluster_members`；
-  - 必要时可读 `articles` / `articles_vec` / `articles_tag_vec` 作补充；
-- 不修改 DB schema；
-- 自行管理：
-  - 源列表文件；
-  - 输出 feed 文件（XML + JSON）；
-  - 打分/排序逻辑和源适配器。
-
----
 
 ## 3. 数据模型
 
 ### 3.1 Candidate（候选文章）
 
-统一的内部结构：
-
 ```python
 @dataclass
 class Candidate:
-    id: str             # 源内唯一 ID，如 hn-123456 / arxiv-xyz / rss-abc
+    id: str
     url: str
     title: str
-    summary: str        # 抓取的正文片段或简短摘要
-    tags: str           # 逗号分隔关键词，可为空
-    source: str         # "hackernews" | "arxiv" | "rss" | ...
+    summary: str
+    tags: str
+    source: str              # "hackernews" | "arxiv" | "rss" | ...
     published_at: datetime
-
-    popularity_score: float         # 0..1，各源自行归一化后的“热度/重要性”
-
-    source_meta: dict[str, Any]     # 源特定字段，仅供源特化打分使用
+    popularity_score: float  # 0..1，源适配器归一化
+    source_meta: dict[str, Any]
 ```
 
-约束：
+约定：
 
-- 主打分逻辑不直接读取 `source_meta` 里的字段，仅用于源特化通道；
-- `popularity_score` 是源方 adapter 的责任：将 HN points / arxiv signal 等归一化成 0..1。
+- `popularity_score`：仅在源有真实信号时赋值（如 HN points/comments）；
+  - 对普通 RSS 源，默认 0.0（不再伪造 0.5 中性值）。
+- `source_meta`：仅供源特化通道使用，主打分逻辑只看 `popularity_score`。
 
-### 3.2 ClusterInfo / InterestMatch
-
-从 `interest_clusters` 读取：
+### 3.2 ClusterInfo / InterestMatch / ScoredItem
 
 ```python
 @dataclass
@@ -167,382 +92,360 @@ class ClusterInfo:
     id: int
     label: str
     size: int
-    centroid: list[float]   # 从 summary_centroid blob 解码
-```
+    centroid: list[float]
 
-候选 vs 簇匹配结果：
 
-```python
 @dataclass
 class InterestMatch:
     best_cluster_id: int
     sim_best: float
     sim_second: float
+    best_cluster_weight: float   # size_k / total_size
+
+
+@dataclass
+class ScoredItem:
+    candidate: Candidate
+    interest_score: float        # sigmoid 拉伸后的兴趣分
+    interest_score_raw: float    # 线性兴趣分（簇加权相似度）
+    final_score: float
+    match: InterestMatch
 ```
 
----
 
-## 4. 配置与环境变量
+## 4. 环境变量（v1）
 
-### 4.1 环境变量（clawfeedradar）
+这里只列出与核心逻辑相关的变量，完整版见 `ENV.example`。
 
-需要在本仓库提供 `ENV.example`，典型内容：
+### 4.1 clawsqlite + Embedding
 
 ```env
-# Embedding service (shared with clawsqlite)
-EMBEDDING_BASE_URL=https://embed.example.com/v1
-EMBEDDING_MODEL=your-embedding-model
-EMBEDDING_API_KEY=sk-your-embedding-key
+CLAWSQLITE_ROOT=/path/to/clawsqlite/data
+CLAWSQLITE_DB=/path/to/clawkb.sqlite3
+
+EMBEDDING_BASE_URL=...
+EMBEDDING_MODEL=...
+EMBEDDING_API_KEY=...
 CLAWSQLITE_VEC_DIM=1024
 
-# Knowledge base root used by clawsqlite
-CLAWSQLITE_ROOT=/home/node/.openclaw/workspace/knowledge_data
-# Optional override
-# CLAWSQLITE_DB=/home/node/.openclaw/workspace/knowledge_data/knowledge.sqlite3
+CLAWSQLITE_INTEREST_TAG_WEIGHT=0.75   # 0..1，控制 summary/tag 向量混合权重
+```
 
-# Source list for clawfeedradar (one URL or identifier per line)
-CLAWFEEDRADAR_SOURCES_FILE=/home/node/.openclaw/workspace/clawfeedradar/sources.txt
+### 4.2 抓取与输出
 
-# Output dir for feeds
-CLAWFEEDRADAR_OUTPUT_DIR=/home/node/.openclaw/workspace/clawfeedradar/feeds
+```env
+CLAWFEEDRADAR_OUTPUT_DIR=/path/to/feeds
+CLAWFEEDRADAR_SCRAPE_CMD="/path/to/clawfetch_wrapper.sh"
+CLAWFEEDRADAR_SCRAPE_WORKERS=4
+# CLAWFEEDRADAR_HTTP_USER_AGENT=...
 
-# Optional: small LLM for summaries/translation
-# SMALL_LLM_BASE_URL=https://llm.example.com/v1
-# SMALL_LLM_MODEL=your-small-llm
-# SMALL_LLM_API_KEY=sk-your-small-llm-key
+CLAWFEEDRADAR_MAX_ITEMS=12   # run 模式默认选几条（可被 --max-items 覆盖）
+```
 
-# Approximate context limits (used by clawfeedradar when chunking fulltext).
-# These are expressed in characters for simplicity; implementations may
-# convert them to tokens internally if needed.
-# 最大输入长度：每次传给小模型的源文本最大字符数。
-CLAWFEEDRADAR_LLM_MAX_INPUT_CHARS=6000
-# 预期输出长度：便于规划 prompt 和输出预算（不强制截断，以模型端为准）。
-CLAWFEEDRADAR_LLM_MAX_OUTPUT_CHARS=6000
+抓取策略：
 
-# Rate limiting / concurrency for LLM calls.
-# v0: 所有翻译调用串行执行（不并行）。
-# 如需在自建小模型上加额外保护，可设定两次调用之间的 sleep 间隔（毫秒）。
+- 使用 `ThreadPoolExecutor(max_workers=CLAWFEEDRADAR_SCRAPE_WORKERS)`；
+- 以 `urlparse(url).netloc` 为 key 做 host 级锁：
+  - 同一 host 下请求串行；
+  - 跨 host 并行；
+- 抓取失败按既有 `fetch_fulltext` 语义重试（3 次 + 退避）。
+
+### 4.3 打分参数
+
+```env
+CLAWFEEDRADAR_W_RECENCY=0.05
+CLAWFEEDRADAR_W_POPULARITY=0.05
+CLAWFEEDRADAR_RECENCY_HALF_LIFE_DAYS=3
+
+# S 型 sigmoid 拉伸的陡峭程度（越大越接近 0/1）
+CLAWFEEDRADAR_INTEREST_SIGMOID_K=4.0
+
+# HN / arxiv 源特化通道的权重
+CLAWFEEDRADAR_LAMBDA_HN=0.2
+CLAWFEEDRADAR_LAMBDA_ARXIV=0.1
+```
+
+### 4.4 LLM 相关
+
+```env
+SMALL_LLM_BASE_URL=...
+SMALL_LLM_MODEL=...
+SMALL_LLM_API_KEY=...
+
+# 上下文预算：近似 token 上限，由代码内部乘以 ~4 转换为字符预算
+CLAWFEEDRADAR_LLM_CONTEXT_TOKENS=8096
+
+# 对译段落级 "一屏" 长度（字符）
+CLAWFEEDRADAR_LLM_MAX_PARAGRAPH_CHARS=2400
+
+# TAG 数量提示
+CLAWFEEDRADAR_LLM_TAG_MAX_PER_ITEM=12
+
+# LLM 请求节流
 CLAWFEEDRADAR_LLM_SLEEP_BETWEEN_MS=500
 
-# Language preferences for translation.
-# 例如："en,zh" 表示输出中英对照；未来可扩展为多语言。
-CLAWFEEDRADAR_LLM_TARGET_LANGS=en,zh
-
-# External scraper command for fulltext fetch (recommended: clawfetch wrapper)
-# The command should accept a URL and emit markdown/plaintext to stdout.
-# Example (pseudo): CLAWFEEDRADAR_SCRAPE_CMD="clawfetch --url"
-# or a shell wrapper that internally 调用 clawfetch skill。
-# CLAWFEEDRADAR_SCRAPE_CMD=clawfetch --url
-
-# Interest mixing weight (used by clawsqlite build-interest-clusters)
-# CLAWSQLITE_INTEREST_TAG_WEIGHT=0.75
-
-# Optional: GitHub Pages publishing config (see 7.2)
-# CLAWFEEDRADAR_GITHUB_REPO=ernestyu/clawfeedradar-feed
-# CLAWFEEDRADAR_GITHUB_BRANCH=gh-pages
-# CLAWFEEDRADAR_GITHUB_FEED_PATH=feeds/radar.xml
+# 语言偏好
+CLAWFEEDRADAR_LLM_SOURCE_LANG=auto
+CLAWFEEDRADAR_LLM_TARGET_LANG=zh
 ```
 
-### 4.2 源列表文件 `sources.txt`
 
-格式：一行一个源 URL 或标识：
+## 5. 源适配器
 
-```text
-https://news.ycombinator.com/
-https://arxiv.org/list/cs.LG/recent
-https://example.com/feed.xml
-```
-
-源类型自动识别：
-
-- host 包含 `news.ycombinator.com` → `source="hackernews"`；
-- host 包含 `arxiv.org` → `source="arxiv"`；
-- 其它 → `source="rss"`；
-
-源适配器负责从 URL 解析出更细粒度的参数（例如 RSS feed 名称、arxiv category 等）。
-
----
-
-## 5. 组件与接口
-
-### 5.1 源适配器（sources/*）
-
-接口定义：
+统一入口：
 
 ```python
-def fetch_candidates_from_source(source_type: str, source_url: str) -> list[Candidate]:
-    """拉取单个源的候选，并转成 Candidate 列表。"""
+def fetch_candidates_from_source(source_type: str, source_url: str, max_items: int | None = None) -> list[Candidate]:
+    ...
 ```
 
-内建 adapter：
+### 5.1 RSS 适配器（sources/rss.py）
 
-- `sources/hn.py`：
-  - 拉取 HN top/new stories（官方 API）；
-  - 提取 title/url/time/points/comment_count；
-  - 归一化得到 `popularity_score`（例如基于 points+comments）；
-  - 其它字段放入 `source_meta`。
+- 使用 `feedparser.parse(source_url)` 获得 entries；
+- 从 entry 提取：`link` / `title` / `summary/description` / `tags` / `published_at`；
+- 源类型：
+  - 如果 feed URL host 包含 `hnrss.org` 或 `news.ycombinator.com` → `source="hackernews"`；
+  - 如果 entry 链接 host 包含 `arxiv.org` → `source="arxiv"`；
+  - 否则 `source="rss"`。
+- popularity：
 
-- `sources/arxiv.py`：
-  - 拉取 arxiv recent 列表（RSS/API）；
-  - 提取 title/abstract/subject/category/date；
-  - 简单规则生成 `popularity_score`（例如近期论文设为较高，历史长文设为中等）。
+  ```python
+  pop = 0.0
+  if source == "hackernews":
+      # 从标题/summary 中解析 "123 points | 45 comments"
+      # 归一化到 0..1 填入 popularity_score
+  ```
 
-- `sources/rss.py`：
-  - 使用 feedparser 等库解析任意 RSS/Atom；
-  - 提取基本字段，`popularity_score` 默认中性（可后续加简单规则）。
+### 5.2 HN / arxiv 专用适配器
 
-### 5.2 兴趣簇读取（sqlite_interest）
+当前 v1 中，
 
-职责：
+- HN RSS 也走 `rss` 适配器，只在 popularity_score 和 source_meta 中保留 points/comments；
+- 如需 arxiv 专用逻辑，可后续新增 `sources/arxiv.py`，但必须遵守 Candidate 模型。
 
-1. 打开 `knowledge.sqlite3`；
-2. 读取 `interest_clusters`，构建 `ClusterInfo` 列表；
-3. 提供相似度计算函数：
-
-```python
-def score_against_clusters(emb: list[float], clusters: list[ClusterInfo]) -> InterestMatch:
-    """计算候选向量与各兴趣簇中心的相似度，返回最相近簇信息。"""
-```
-
-- 相似度指标可用余弦或归一化后的 L2 距离；
-- 需要提供 `sim_best` 和 `sim_second`，用于后续打分。
-
-### 5.3 候选向量生成（Embedding）
-
-雷达端使用与 clawsqlite 相同的 Embedding 服务：
-
-```python
-def embed_candidate(candidate: Candidate) -> list[float]:
-    """对候选文章生成向量，默认使用 title+summary 作为输入文本。"""
-```
-
-- 使用 `EMBEDDING_*` 和 `CLAWSQLITE_VEC_DIM` 配置；
-- 不依赖 clawsqlite 内部 embed 模块（保持项目解耦）。
-
----
 
 ## 6. 打分与排序
 
-### 6.1 通用主通道：Interest Score
+### 6.1 兴趣向量构造
 
-对每个候选 `candidate`：
+对每个过滤后的候选：
 
-1. 生成向量 `emb = embed_candidate(candidate)`；
-2. 与兴趣簇计算相似度：
-
-   ```python
-   match = score_against_clusters(emb, clusters)
-   sim_best   = match.sim_best
-   sim_second = match.sim_second
-   best_cluster_id = match.best_cluster_id
-   ```
-
-3. 结合时间与通用热度：
+1. 使用 `_build_long_summary(fulltext)` 构造长摘要：
+   - 按空行分段；
+   - 从头累加段落，直到接近约 1200 字符，在段落边界截断；
+   - 若末段未包含，则追加末段；
+   - 若全文抓取失败，则回退为 `title + "\n\n" + summary`。
+2. 对所有长摘要批量调用 LLM 生成 TAG（`generate_tags_bulk`，支持部分成功 + 重试）。
+3. 使用 embedding 客户端：
+   - `embed_texts(long_summaries)`：串行、带重试和限速；
+   - 对 TAG 文本调用 `embed_text`，失败降级为零向量。
+4. 按 `CLAWSQLITE_INTEREST_TAG_WEIGHT` 混合 summary/tag embedding，得到兴趣向量：
 
    ```text
-   recency = f(published_at)           # 例如最近 24h/7d 内权重较高
-   pop     = candidate.popularity_score
-
-   # 边缘度：近二网络却不被一个群极端“碎压”
-   border = sim_second * (1.0 - sim_best)
-
-   interest_score = a1 * sim_best
-                  + a2 * border
-                  + a3 * recency
-                  + a4 * pop
+   interest_emb = (1 - w_tag) * summary_emb + w_tag * tag_emb
    ```
 
-- `a1..a4` 为可调参数（可在 config/ENV 中设默认值）；
-- v0 中 **不使用** DB 中的 `article_usage`（view_count/last_viewed_at），以避免早期稀疏数据带来噪音。
+### 6.2 interest_score 计算
 
-### 6.2 源特化通道（可选增量）
+1. 从 clawsqlite 读取所有兴趣簇：`ClusterInfo(id, size, centroid)`；
+2. 预先计算簇权重：
 
-为少数特征丰富的源（如 HN / arxiv）提供可选的增量打分通道：
+   ```text
+   total_size = Σ_k max(1, size_k)
+   cluster_weight_k = size_k / total_size
+   ```
+
+3. 对每个候选兴趣向量 `emb`：
+
+   ```python
+   # 线性兴趣分
+   interest_raw = 0.0
+   best_cluster_id = -1
+   best_sim = 0.0
+   second_sim = 0.0
+
+   for cluster in clusters:
+       sim = cosine(emb, cluster.centroid)
+       sim = max(sim, 0.0)  # 负值截断为 0
+       w = cluster_weight[cluster.id]
+       interest_raw += w * sim
+
+       # 跟踪 top-2 相似度
+       if sim > best_sim:
+           second_sim = best_sim
+           best_sim = sim
+           best_cluster_id = cluster.id
+       elif sim > second_sim:
+           second_sim = sim
+
+   best_cluster_weight = cluster_weight[best_cluster_id]
+   ```
+
+4. S 型 sigmoid 拉伸：
+
+   ```python
+   # k 来自 CLAWFEEDRADAR_INTEREST_SIGMOID_K，默认 4.0
+   z = k * (interest_raw - 0.5)
+   interest = 1.0 / (1.0 + exp(-z))
+   ```
+
+   - `interest_raw` 与 `interest` 均写入 `ScoredItem`；
+   - JSON 输出中字段为 `interest_score_raw` / `interest_score`。
+
+### 6.3 时间与热度偏置
+
+在 sigmoid 后的 `interest` 上叠加轻度偏置：
 
 ```python
-def score_generic_extra(c: Candidate, base: float) -> float:
+rec = recency_weight(published_at, now, half_life_seconds)
+# half_life_seconds = CLAWFEEDRADAR_RECENCY_HALF_LIFE_DAYS * 24 * 3600
+
+pop = clamp(candidate.popularity_score, 0.0, 1.0)
+
+interest_bias = params.w_recency * rec + params.w_popularity * pop
+biased_interest = interest + interest_bias
+```
+
+默认：
+
+- `w_recency = w_popularity = 0.05`；
+- 对无 popularity 信号的源，`pop=0`，不会产生伪造偏置。
+
+### 6.4 源特化通道与 final_score
+
+源特化通道只允许 *加分*，并且通过一个 λ 系数稀释：
+
+```python
+def score_generic_extra(cand: Candidate, base: float) -> float:
     return 0.0
 
 
-def score_hn_extra(c: Candidate, base: float) -> float:
-    meta = c.source_meta or {}
-    points = meta.get("hn_points", 0)
-    comments = meta.get("hn_comments", 0)
-    return 0.5 * (points / 500.0) + 0.5 * (comments / 100.0)
+def score_hn_extra(cand: Candidate, base: float) -> float:
+    meta = cand.source_meta or {}
+    points = float(meta.get("hn_points", 0) or 0)
+    comments = float(meta.get("hn_comments", 0) or 0)
+    s_points = min(1.0, points / 500.0)
+    s_comments = min(1.0, comments / 100.0)
+    return 0.5 * s_points + 0.5 * s_comments
 
 
 SOURCE_SCORERS = {
     "hackernews": score_hn_extra,
-    # 将来可以增加 "arxiv": score_arxiv_extra
+    "arxiv": score_arxiv_extra,   # 目前返回 0.0
 }
 
 LAMBDA_SOURCE = {
-    "hackernews": 0.2,
+    "hackernews": λ_hn,   # 默认 0.2
+    "arxiv": λ_arxiv,     # 默认 0.1
     "default": 0.1,
 }
 
 
-def compute_final_score(c: Candidate, interest_score: float) -> float:
-    extra = SOURCE_SCORERS.get(c.source, score_generic_extra)(c, interest_score)
-    lam = LAMBDA_SOURCE.get(c.source, LAMBDA_SOURCE["default"])
+def compute_final_score(cand: Candidate, interest_score: float) -> float:
+    extra_fn = SOURCE_SCORERS.get(cand.source, score_generic_extra)
+    lam = LAMBDA_SOURCE.get(cand.source, LAMBDA_SOURCE["default"])
+    extra = float(extra_fn(cand, interest_score) or 0.0)
     return interest_score + lam * extra
 ```
 
-约束：
+最终 `ScoredItem.final_score` 用于排序，JSON 中写入 `final_score`。
 
-- 主排序分数为 `final_score`；
-- `interest_score` 始终是主要部分，源特化通道只提供有限偏移；
-- 源特化函数只能读取 `candidate.source_meta` 和 `candidate.popularity_score`，不得直接访问 clawsqlite 内部。
 
-### 6.3 多样性与探索策略
+## 7. 选择与输出
 
-生成一次 feed（如 8~12 条）时：
+### 7.1 选择策略
 
-1. 对所有 candidates 计算：
+1. 对所有候选得到 `ScoredItem` 列表；
+2. 按 `final_score` 降序排序；
+3. 过滤：`interest_score >= score_threshold`；
+4. 取前 `max_items` 条。
 
-   - `interest_score`
-   - `final_score`
-   - `best_cluster_id`
+v1 中暂不做复杂的“按簇配额 + 探索条目”算法，后续如需要可在此处扩展（例如按 `best_cluster_id` 分桶做轮询）。
 
-2. 主线（exploitation）：
+### 7.2 JSON sidecar
 
-   - 按 `final_score` 降序排序；
-   - 按 `best_cluster_id` 分桶；
-   - 轮询/配额方式选取主线条目：
-     - 每个簇最多 M 条（例如 2~3 条）；
-     - 总数达到主线目标（例如 8 条）后停止。
+对每个 run/schedule 输出的 JSON，单条结构示例：
 
-3. 探索（exploration）：
-
-   - 从剩余候选中，基于“探索分数”选出 1~2 条，例如：
-     - `score_explore` 更偏重 summary 语义（或跨簇相似度）；
-     - 处于主要簇边界（sim_best 中等、sim_second 不低）；
-     - 或 popularity 很高而 interest_score 中等。 
-   - 这些条目用于在兴趣边界上“扫一圈”，防止视野过窄。
-
-4. 主线 + 探索条目合并，按时间或分数略作 re-order 后交给 feed 生成模块。
-
----
-
-## 7. Feed 输出与发布
-
-### 7.1 内容生成流水线（抓全文 + 中英对译）
-
-被选中的候选条目不直接以“链接+短摘要”形式进入 RSS，而是经过两步加工：
-
-1. **抓取全文（fulltext scrape）**
-
-   - 对每个入选 Candidate 调用外部抓取命令：
-
-     ```bash
-     ${CLAWFEEDRADAR_SCRAPE_CMD} <url>
-     ```
-
-   - 该命令应：
-     - 从给定 URL 抓取正文；
-     - 输出 markdown 或可读文本到 stdout；
-     - 推荐实现方式：在 OpenClaw 环境中用一个 shell 包装器调用 `clawfetch` skill，对不同站点做细致适配。
-
-   - 若抓取失败：
-     - 可退回到原始 `summary`/`title` 做简短摘要；
-     - 在 RSS 中标记为“抓取失败，仅保留简介”。
-
-2. **中英对译摘要（LLM 处理）**
-
-   - 将抓取到的全文（或部分截断）传给小模型（SMALL_LLM_*）：
-
-     ```python
-     def generate_bilingual_summary(fulltext: str, meta: Candidate) -> dict:
-         # 返回 title_en/title_zh/summary_en/summary_zh 等字段
-     ```
-
-   - 要求输出：
-     - 英文标题 + 中文标题（可选）；
-     - 分段/段落级中英对译摘要，适合在 RSS 阅读器里“中英对照”阅读；
-   - 若未配置 SMALL_LLM_*：
-     - 可以先只输出英文原文/摘要，留出未来升级空间。
-
-### 7.2 同时输出 XML 与 JSON
-
-每次运行 `clawfeedradar run` 时：
-
-- 输出一个 RSS/Atom XML 文件（例如 `radar.xml`）；
-- 同时输出一个 JSON 文件（例如 `radar.json`），包含：
-  - 所有选中条目的字段；
-  - 打分明细（interest_score/final_score/best_cluster 等）；
-  - 抓取到的 fulltext 概要（可选）以及中英摘要结果；
-
-文件路径约定：
-
-- XML：`${CLAWFEEDRADAR_OUTPUT_DIR}/radar.xml`
-- JSON：`${CLAWFEEDRADAR_OUTPUT_DIR}/radar.json`
-
-### 7.2 GitHub Pages 发布（可选）
-
-若用户希望通过 GitHub Pages 对外提供 RSS：
-
-- 环境变量：
-
-  ```env
-  CLAWFEEDRADAR_GITHUB_REPO=ernestyu/clawfeedradar-feed
-  CLAWFEEDRADAR_GITHUB_BRANCH=gh-pages
-  CLAWFEEDRADAR_GITHUB_FEED_PATH=feeds/radar.xml
-  ```
-
-- 逻辑建议（后续实现）：
-  - clawfeedradar 在本地生成 `radar.xml` / `radar.json`；
-  - 通过 `git` 或 GitHub API 将 `radar.xml` 同步到指定 repo 的指定分支和路径；
-  - 用户在 RSS 阅读器订阅：
-
-    ```
-    https://<user>.github.io/<repo>/feeds/radar.xml
-    ```
-
-此功能为可选增强：v0 实现可先只在本地写文件，GitHub Pages 发布由用户自行配置；后续如有需要再集成自动 push/更新逻辑。
-
----
-
-## 8. CLI 规格
-
-### 8.1 主命令：`clawfeedradar run`
-
-```bash
-clawfeedradar run \
-  --root /path/to/knowledge_data \
-  --sources-file /path/to/sources.txt \
-  --output /path/to/feeds/radar.xml \
-  --score-threshold 0.9 \
-  --max-items 12 \
-  [--json]
+```jsonc
+{
+  "id": "...",
+  "url": "https://...",
+  "title": "...",
+  "summary": "...",
+  "source": "rss",
+  "published_at": "2026-04-04T09:34:49+00:00",
+  "popularity_score": 0.0,
+  "interest_score": 0.52,
+  "interest_score_raw": 0.48,
+  "final_score": 0.56,
+  "best_cluster_id": 9,
+  "best_cluster_weight": 0.16,
+  "fulltext": "...",
+  "summary_preview": "...",
+  "body_bilingual": "..."
+}
 ```
 
-参数语义：
 
-- `--root`：clawsqlite 知识库根目录；若省略，则从 `CLAWSQLITE_ROOT` 获取。
-- `--sources-file`：源列表文件路径；若省略，则从 `CLAWFEEDRADAR_SOURCES_FILE` 获取。
-- `--output`：RSS XML 输出路径；若省略，则使用 `${CLAWFEEDRADAR_OUTPUT_DIR}/radar.xml`。
-- `--score-threshold`：过滤掉 interest_score 低于阈值的候选（默认 0.0 或配置值）。
-- `--max-items`：总输出条目数上限（主线 + 探索）。
-- `--json`：当为 true 时，将选中条目及打分明细打印到 stdout（仍然写 XML/JSON 文件）。
+## 8. CLI 与调度
 
-内部步骤（逻辑约定）：
+### 8.1 `clawfeedradar run`
 
-1. 加载 env/config；
-2. （可选，由 cron 负责）事先在 clawsqlite 端定期跑：
+- 单源模式：
 
-   ```bash
-   clawsqlite knowledge build-interest-clusters --root ...
-   ```
+  ```bash
+  clawfeedradar run \
+    --root /path/to/knowledge_data \
+    --url https://example.com/feed.xml \
+    --output ./feeds/example.xml \
+    --score-threshold 0.4 \
+    --max-items 12 \
+    [--max-source-items 50] \
+    [--w-recency 0.05] [--w-popularity 0.05] \
+    [--feed-title "My Radar"] \
+    [--source-lang en] [--target-lang zh] \
+    [--no-preview] [--preview-words 512] \
+    [--json]
+  ```
 
-3. 读取 `interest_clusters` 为 `ClusterInfo` 列表；
-4. 根据 `sources-file` 调用各源适配器生成 Candidate 列表；
-5. 对每个 Candidate：
-   - 生成向量；
-   - 计算 `interest_score` / `final_score` / `InterestMatch`；
-6. 按 6.3 的多样性与探索策略选择条目；
-7. 生成 RSS XML + JSON 文件；
-8. 若配置了 GitHub Pages 发布，可额外同步 XML 到指定 repo/branch/path。
+- CLI 优先级：
+  - `--root` > `CLAWSQLITE_ROOT`；
+  - `--max-items` > `CLAWFEEDRADAR_MAX_ITEMS` > 默认 12；
+  - `--w-recency` / `--w-popularity` > 环境变量 > 默认值。
+
+### 8.2 `clawfeedradar schedule`
+
+- 从 `sources.json` 读取多个源，每个源输出 `{label}.xml` + `{label}.json`：
+
+  ```bash
+  clawfeedradar schedule \
+    --root /path/to/knowledge_data \
+    --sources-json /path/to/sources.json \
+    --output-dir ./feeds
+  ```
+
+- `sources.json` 单条示例：
+
+  ```jsonc
+  {
+    "label": "bbc-tech",
+    "url": "https://feeds.bbci.co.uk/news/technology/rss.xml",
+    "interval_hours": 8,
+    "max_entries": 15,
+    "score_threshold": 0.4,
+    "source_lang": "en",
+    "target_lang": "zh",
+    "last_success_at": null,
+    "last_error": null
+  }
+  ```
+
+- 调度逻辑：
+  - `last_success_at` 为空或早于 `now - interval_hours` → 判定为 due；
+  - 运行与 `run` 相同的 pipeline，`max_items = max_entries`；
+  - 更新 `last_success_at` / `last_error` 写回 `sources.json`。
 
 ---
 
-本 SPEC 作为 v0 的实现依据；后续如需调整（例如引入 usage、score-candidates 下放到 clawsqlite、增加别的源类型），应在本文件中更新对应章节后再动代码。 
+本 SPEC 以 clawfeedradar 当前实现为准。
+未来若有新的 scoring/LLM 行为引入，应同步更新本文件，避免 v0/v1 设计混在一起。

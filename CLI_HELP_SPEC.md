@@ -22,8 +22,12 @@ options:
 ```text
 usage: clawfeedradar run [-h] [--root ROOT] --url URL [--output OUTPUT]
                          [--score-threshold SCORE_THRESHOLD]
-                         [--max-items MAX_ITEMS] [--source-lang SOURCE_LANG]
-                         [--target-lang TARGET_LANG] [--json]
+                         [--max-items MAX_ITEMS]
+                         [--max-source-items MAX_SOURCE_ITEMS]
+                         [--w-recency W_RECENCY] [--w-popularity W_POPULARITY]
+                         [--feed-title FEED_TITLE] [--source-lang SOURCE_LANG]
+                         [--target-lang TARGET_LANG] [--no-preview]
+                         [--preview-words PREVIEW_WORDS] [--json]
 
 options:
   -h, --help            show this help message and exit
@@ -36,11 +40,24 @@ options:
   --max-items MAX_ITEMS
                         maximum number of items in the feed (overrides
                         CLAWFEEDRADAR_MAX_ITEMS or default 12)
+  --max-source-items MAX_SOURCE_ITEMS
+                        max entries to pull from source feed before scoring
+                        (only for run)
+  --w-recency W_RECENCY
+                        per-run recency bias weight (overrides default)
+  --w-popularity W_POPULARITY
+                        per-run popularity bias weight (overrides default)
+  --feed-title FEED_TITLE
+                        RSS channel title for this run (default:
+                        clawfeedradar)
   --source-lang SOURCE_LANG
                         source language hint for LLM (e.g. en, auto by
                         default)
   --target-lang TARGET_LANG
                         target language for summaries/translation (e.g. zh)
+  --no-preview          disable preview summary LLM (debug/fast mode)
+  --preview-words PREVIEW_WORDS
+                        target length for preview summary in words (run mode)
   --json                also print selected items as JSON to stdout
 ```
 

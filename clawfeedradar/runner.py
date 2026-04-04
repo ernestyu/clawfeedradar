@@ -586,6 +586,15 @@ def _run_pipeline_for_candidates(
     logger.info("[pipeline] wrote %d items to %s (json=%s); seen_urls now=%d",
                 len(enriched), output_xml_path, output_json_path, len(seen_urls))
 
+    # Optional publish step (git-based: GitHub/Gitee Pages)
+    try:
+        from .publish import publish_via_git
+        pub_rc = publish_via_git(str(output_xml_path))
+        if pub_rc != 0:
+            logger.warning("[publish] git-based publish failed with code %d; see logs/stdout for details", pub_rc)
+    except Exception as e:
+        logger.warning("[publish] git-based publish raised an exception: %s", e)
+
     # Update seen-URL state for processed candidates (7-day window)
     for norm in normalized_urls:
         seen_urls[norm] = now_dt

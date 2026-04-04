@@ -83,6 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--feed-title", help="RSS channel title for this run (default: clawfeedradar)")
     rp.add_argument("--source-lang", help="source language hint for LLM (e.g. en, auto by default)")
     rp.add_argument("--target-lang", help="target language for summaries/translation (e.g. zh)")
+    rp.add_argument("--no-preview", action="store_true", help="disable preview summary LLM (debug/fast mode)")
     rp.add_argument("--json", action="store_true", help="also print selected items as JSON to stdout")
     rp.set_defaults(func=_cmd_run)
 
@@ -142,6 +143,7 @@ def _cmd_run(args) -> int:
         score_params=base_params,
         source_lang=args.source_lang,
         target_lang=args.target_lang,
+        enable_preview=not bool(args.no_preview),
     )
     if rc == 0:
         print(f"[run] radar completed successfully for URL {url!r}, output={output_xml}")

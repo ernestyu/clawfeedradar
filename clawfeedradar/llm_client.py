@@ -265,11 +265,11 @@ def generate_bilingual_body(fulltext: str, cfg: SmallLLMConfig) -> str:
     while pending and attempt < max_attempts:
         attempt += 1
         to_process = [(idx, screen_segments[idx]) for idx in sorted(pending)]
-        # Interpret CLAWFEEDRADAR_LLM_CONTEXT_CHARS as an approximate token budget
+        # Interpret CLAWFEEDRADAR_LLM_CONTEXT_TOKENS as an approximate token budget
         # and convert to a coarse character budget for input side. Humans think in tokens,
         # but our chunking works on characters, so we multiply by a rough factor (4) here.
         try:
-            context_tokens = int(os.environ.get("CLAWFEEDRADAR_LLM_CONTEXT_CHARS", "8000") or "8000")
+            context_tokens = int(os.environ.get("CLAWFEEDRADAR_LLM_CONTEXT_TOKENS", "8000") or "8000")
         except Exception:
             context_tokens = 8000
         if context_tokens <= 0:
@@ -303,7 +303,7 @@ def generate_bilingual_body(fulltext: str, cfg: SmallLLMConfig) -> str:
                     {"role": "system", "content": sys_prompt},
                     {"role": "user", "content": user_content},
                 ],
-                # max_tokens omitted; we control input size via CLAWFEEDRADAR_LLM_CONTEXT_CHARS.
+                # max_tokens omitted; we control input size via CLAWFEEDRADAR_LLM_CONTEXT_TOKENS.
             }
 
             try:
@@ -350,9 +350,9 @@ def generate_tags_bulk(summaries: list[str], cfg: SmallLLMConfig) -> list[str]:
     tgt = cfg.target_lang
 
     # LLM context budget (approximate, in characters) for tag generation input.
-    # Interpret CLAWFEEDRADAR_LLM_CONTEXT_CHARS as approximate token budget.
+    # Interpret CLAWFEEDRADAR_LLM_CONTEXT_TOKENS as approximate token budget.
     try:
-        context_tokens = int(os.environ.get("CLAWFEEDRADAR_LLM_CONTEXT_CHARS", "8000") or "8000")
+        context_tokens = int(os.environ.get("CLAWFEEDRADAR_LLM_CONTEXT_TOKENS", "8000") or "8000")
     except Exception:
         context_tokens = 8000
     if context_tokens <= 0:
@@ -428,7 +428,7 @@ def generate_tags_bulk(summaries: list[str], cfg: SmallLLMConfig) -> list[str]:
                     {"role": "system", "content": sys_prompt},
                     {"role": "user", "content": user_content},
                 ],
-                # max_tokens omitted; we control input size via CLAWFEEDRADAR_LLM_CONTEXT_CHARS.
+                # max_tokens omitted; we control input size via CLAWFEEDRADAR_LLM_CONTEXT_TOKENS.
             }
             try:
                 raw = _post_chat(payload, cfg)

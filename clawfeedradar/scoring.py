@@ -143,15 +143,24 @@ def score_candidates(
         total_size = 1
     cluster_weights = {c.id: max(1, int(c.size or 0)) / total_size for c in clusters}
 
-    # Optional non-linear stretching of interest_score to improve thresholding.
-    # CLAWFEEDRADAR_INTEREST_GAMMA > 1.0 will push scores towards 0 and 1 (monotonic transform).
+    # Optional non-linear stretching of interest_score via an S-shaped sigmoid.
+    # CLAWFEEDRADAR_INTEREST_SIGMOID_K controls steepness around 0.5 (default 4.0).
     import math
     try:
-        gamma = float(os.environ.get("CLAWFEEDRADAR_INTEREST_GAMMA", "1.0") or "1.0")
+        k = float(os.environ.get("CLAWFEEDRADAR_INTEREST_SIGMOID_K", "4.0") or "4.0")
     except Exception:
-        gamma = 1.0
-    if gamma <= 0.0:
-        gamma = 1.0
+        k = 4.0
+    if k <= 0.0:
+        k = 4.0
+
+    def _stretch_interest(x: float) -> float:
+        """Symmetric logistic sigmoid centered at 0.5, mapped back to [0, 1]."""
+        # Standard logistic: s(z) = 1 / (1 + exp(-z)) ranges in (0,1).
+        # We center around 0.5: z = k * (x - 0.5), then re-center to keep 0.5 fixed.
+        # For x=0.5 => z=0 => s=0.5.
+        z = k * (x - 0.5)
+        s = 1.0 / (1.0 + math.exp(-z))
+        return s
 
     params = params or load_score_params_from_env()
     now = datetime.now(timezone.utc)
@@ -181,9 +190,8 @@ def score_candidates(
                 second_sim = sim
 
         interest = float(total)
-        # Apply optional non-linear stretching: interest_nl = interest ** gamma
-        if gamma != 1.0:
-            interest = interest ** gamma
+        # Apply optional non-linear stretching: interest_nl = sigmoid(interest)
+        interest = _stretch_interest(interest)
         match = InterestMatch(best_cluster_id=best_cluster_id, sim_best=best_sim, sim_second=second_sim)
 
         # 时间与源特化作为轻度偏置

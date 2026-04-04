@@ -265,13 +265,18 @@ def generate_bilingual_body(fulltext: str, cfg: SmallLLMConfig) -> str:
     while pending and attempt < max_attempts:
         attempt += 1
         to_process = [(idx, screen_segments[idx]) for idx in sorted(pending)]
+        # Interpret CLAWFEEDRADAR_LLM_CONTEXT_CHARS as an approximate token budget
+        # and convert to a coarse character budget for input side. Humans think in tokens,
+        # but our chunking works on characters, so we multiply by a rough factor (4) here.
         try:
-            context_chars = int(os.environ.get("CLAWFEEDRADAR_LLM_CONTEXT_CHARS", "8000") or "8000")
+            context_tokens = int(os.environ.get("CLAWFEEDRADAR_LLM_CONTEXT_CHARS", "8000") or "8000")
         except Exception:
-            context_chars = 8000
-        if context_chars <= 0:
-            context_chars = 8000
-        # Use ~40%% of context budget for input paragraphs, leaving room for output.
+            context_tokens = 8000
+        if context_tokens <= 0:
+            context_tokens = 8000
+        # Rough char budget: ~4 chars per token
+        context_chars = context_tokens * 4
+        # Use ~40% of context budget for input paragraphs, leaving room for output.
         input_budget = int(context_chars * 0.4)
         if input_budget <= 0:
             input_budget = context_chars
@@ -345,12 +350,15 @@ def generate_tags_bulk(summaries: list[str], cfg: SmallLLMConfig) -> list[str]:
     tgt = cfg.target_lang
 
     # LLM context budget (approximate, in characters) for tag generation input.
+    # Interpret CLAWFEEDRADAR_LLM_CONTEXT_CHARS as approximate token budget.
     try:
-        context_chars = int(os.environ.get("CLAWFEEDRADAR_LLM_CONTEXT_CHARS", "8000") or "8000")
+        context_tokens = int(os.environ.get("CLAWFEEDRADAR_LLM_CONTEXT_CHARS", "8000") or "8000")
     except Exception:
-        context_chars = 8000
-    if context_chars <= 0:
-        context_chars = 8000
+        context_tokens = 8000
+    if context_tokens <= 0:
+        context_tokens = 8000
+    # Rough char budget: ~4 chars per token
+    context_chars = context_tokens * 4
 
     # Max tags per item (informational hint in the prompt), default 8.
     try:

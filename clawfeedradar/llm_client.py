@@ -337,8 +337,23 @@ def generate_tags_bulk(summaries: list[str], cfg: SmallLLMConfig) -> list[str]:
     src = cfg.source_lang or "auto"
     tgt = cfg.target_lang
 
-    # Simple batching heuristic: group up to 16 summaries per LLM call.
-    def _chunks(idxs, n=4):
+    # Batch size for tag generation: controlled by env, default 4 per call.
+    try:
+        max_items_per_call = int(os.environ.get("CLAWFEEDRADAR_LLM_TAG_MAX_ITEMS_PER_CALL", "4") or "4")
+    except Exception:
+        max_items_per_call = 4
+    if max_items_per_call <= 0:
+        max_items_per_call = 1
+
+    # Max tags per item (informational hint in the prompt), default 8.
+    try:
+        max_tags_per_item = int(os.environ.get("CLAWFEEDRADAR_LLM_TAG_MAX_PER_ITEM", "8") or "8")
+    except Exception:
+        max_tags_per_item = 8
+    if max_tags_per_item <= 0:
+        max_tags_per_item = 1
+
+    def _chunks(idxs, n=max_items_per_call):
         idxs = list(idxs)
         for i in range(0, len(idxs), n):
             yield idxs[i:i+n]
@@ -359,7 +374,8 @@ def generate_tags_bulk(summaries: list[str], cfg: SmallLLMConfig) -> list[str]:
                 "You receive a JSON object with an 'items' array; each item has "
                 "an 'idx' and a 'summary'. For each item, produce a concise tag "
                 "string (comma-separated keywords) that best describes the topic "
-                "of the summary. Return a JSON array of objects of the form "
+                f"of the summary. Limit to at most {max_tags_per_item} tags per item. "
+                "Return a JSON array of objects of the form "
                 "{\"idx\": int, \"tags\": str}. Do not include any extra text."
             )
             user_content = json.dumps(payload_obj, ensure_ascii=False)

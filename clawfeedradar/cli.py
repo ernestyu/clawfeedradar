@@ -6,7 +6,8 @@ from __future__ import annotations
 Commands:
 - `clawfeedradar demo`：使用假数据验证打分链路；
 - `clawfeedradar run`：从 sources 文件拉取候选，跑完整打分并输出单一 XML+JSON；
-- `clawfeedradar schedule`：定期扫描 sources.json，为每个源生成独立的 XML+JSON。
+- `clawfeedradar schedule`：定期扫描 sources.json，为每个源生成独立的 XML+JSON；
+- `clawfeedradar doctor`：检查当前项目配置与环境变量，输出 JSON 自检报告。
 """
 
 import argparse
@@ -94,6 +95,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--output-dir", help="Output directory for per-source feeds (default: $CLAWFEEDRADAR_OUTPUT_DIR or ./feeds)")
     sp.set_defaults(func=_cmd_schedule)
 
+    dp = sub.add_parser("doctor", help="Self-check clawfeedradar env & KB, output JSON report")
+    dp.set_defaults(func=_cmd_doctor)
+
     return p
 
 
@@ -180,6 +184,12 @@ def _cmd_schedule(args) -> int:
     else:
         print(f"[schedule] radar schedule exited with code {rc} from {sources_json!r}, output_dir={output_dir}")
     return rc
+
+
+def _cmd_doctor(args) -> int:
+    from .doctor import run_doctor
+
+    return run_doctor()
 
 
 def main(argv: list[str] | None = None) -> int:

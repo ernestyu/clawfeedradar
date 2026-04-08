@@ -44,7 +44,7 @@ yarn-debug.log*
 yarn-error.log*
 
 # =========================
-# Env files (重要)
+# Env files
 # =========================
 .env
 .env.*
@@ -62,3 +62,9 @@ logs/
 *.tmp
 *.bak
 *.cache
+
+# =========================
+# User-specific files
+# =========================
+state/
+docs/
